@@ -7,6 +7,7 @@ from dateutil import parser as date_parser
 from urllib.parse import urljoin
 from groq import Groq
 import telebot
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Configure basic logging for GitHub Actions debugging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -109,7 +110,7 @@ def extract_article_data(article_url):
         paragraphs = soup.find_all('p')
         text = "\n".join([p.get_text(strip=True) for p in paragraphs if len(p.get_text(strip=True)) > 20])
         
-        return {'url': article_url, 'title': title, 'date': pub_date, 'text': text[:2000]}
+        return {'url': article_url, 'title': title, 'date': pub_date, 'text': text[:500]}
     except Exception as e:
         logging.error(f"Failed to process {article_url}: {e}")
         return None
@@ -125,14 +126,19 @@ def scrape_all_news():
         logging.info(f"Scanning {company_name}...")
         links = get_article_links(news_url)
         
-        for link in links:
-            data = extract_article_data(link)
-            # Only keep articles that match our target dates
-            if data and data['date'] in target_dates:
-                data['company'] = company_name # Attach company name
-                collected_news.append(data)
-                logging.info(f"  Found: {data['title']}")
-                
+        # --- SPEED FIX: Scrape articles concurrently (10 at a time) ---
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            # Submit all links to be scraped at the same time
+            future_to_link = {executor.submit(extract_article_data, link): link for link in links}
+            
+            # Process them as they finish
+            for future in as_completed(future_to_link):
+                data = future.result()
+                if data and data['date'] in target_dates:
+                    data['company'] = company_name 
+                    collected_news.append(data)
+                    logging.info(f"  Found: {data['title']}")
+                    
     return collected_news
 
 # =====================================================================
