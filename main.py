@@ -20,8 +20,20 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 # The bot will use the exact name you type here in the final message.
 COMPANIES_TO_TRACK = {
     "BW Group": "https://www.bw-group.com/news",
-    "BW Offshore": "https://www.bw-offshore.com/news",
-    "BW Epic": "https://www.bw-epic.com/news",
+    "BW Digital": "https://www.bw-digital.com/news/",
+    "BW Dry Cargo": "https://bwdrycargo.com/news", 
+    "BW Energy": "https://www.bwenergy.no/en/news-and-media/",
+    "BW ESS": "https://bw-ess.com/news",
+    "BW Epic Kosan": "https://bwek.com/media/latest-news/",
+    "BW Ideol": "https://www.bw-ideol.com/en/latest-news",
+    "BW LNG": "https://bwlng.com/news", 
+    "BW LPG": "https://www.bwlpg.com/media/press-releases/",
+    "BW Offshore": "https://bwoffshore.com/news-media",
+    "BW Water": "https://bw-water.com/news/",
+    "Cadeler": "https://www.cadeler.com/news",
+    "Corvus Energy": "https://corvusenergy.com/news",
+    "Hafnia": "https://hafnia.com/news/",
+    "Navigator Gas": "https://navigatorgas.com/news/",
     # "Company Name": "https://url-to-their-news-page.com",
 }
 
