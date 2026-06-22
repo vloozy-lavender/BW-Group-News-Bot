@@ -1,0 +1,27 @@
+name: Daily BW Group News
+
+on:
+  schedule:
+    # Runs once a day at 08:00 UTC. 
+    # TWEAK THIS: Change '0 8' to your preferred hour (24h format).
+    - cron: '0 8 * * *'
+  workflow_dispatch: # Allows you to click "Run" manually in GitHub to test it
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+        
+      - name: Run News Bot
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+        run: python main.py
