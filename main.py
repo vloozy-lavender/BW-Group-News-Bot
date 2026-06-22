@@ -153,7 +153,7 @@ def format_with_groq(articles):
     client = Groq(api_key=GROQ_API_KEY)
     try:
         completion = client.chat.completions.create(
-            model="llama-3.1-8b-instant", # Very fast and cheap/free tier friendly
+            model="llama-3.3-70b-versatile", # The smartest free model on Groq
             messages=[{"role": "user", "content": prompt}],
             temperature=0.2,
             max_tokens=800,
