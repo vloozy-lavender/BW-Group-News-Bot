@@ -156,7 +156,7 @@ def extract_article_data(article_url):
         return {
             'url': article_url,
             'title': title,
-            'date': str(pub_date) if pub_date else None,  # <--- ADD str() HERE
+            'date': pub_date,
             'text': text[:500],
             'source': 'website'
         }
@@ -226,7 +226,7 @@ def scrape_linkedin():
             collected_posts.append({
                 'url': item.get('url', ''),
                 'title': item.get('text', '')[:100] + "..." if len(item.get('text', '')) > 100 else item.get('text', ''),
-                'date': str(post_date) if post_date else None,  # <--- ADD str() HERE
+                'date': post_date,
                 'text': item.get('text', '')[:500],
                 'company': company_name.title(),
                 'source': 'linkedin'
@@ -364,6 +364,7 @@ def generate_html_email(processed_items, start_date, end_date):
     
     return html
 
+
 def send_email(html_content, start_date, end_date):
     """Send the email via Resend."""
     resend.api_key = RESEND_API_KEY
@@ -421,6 +422,13 @@ def main():
     html_content = generate_html_email(processed_items, start_date, end_date)
     send_email(html_content, start_date, end_date)
     
+    # Convert dates to text strings right before saving to JSON
+    for item in new_items:
+        try:
+            item['date'] = item['date'].strftime('%Y-%m-%d')
+        except Exception as e:
+            logging.warning(f"Could not convert date for {item.get('url')}: {e}")
+            
     # Update archive
     archive.extend(new_items)
     save_archive(archive)
@@ -430,3 +438,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
