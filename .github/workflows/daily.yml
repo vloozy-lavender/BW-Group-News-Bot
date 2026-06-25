@@ -1,5 +1,9 @@
 name: Weekly BW News Digest
 
+# This gives the bot permission to push the archive.json file back to the repo
+permissions:
+  contents: write
+
 on:
   schedule:
     # Runs at 8:00 AM UTC every Friday
@@ -13,16 +17,17 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          persist-credentials: false
-      
+          # This ensures the bot can use the token to push later
+          persist-credentials: true 
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      
+
       - name: Install dependencies
         run: pip install -r requirements.txt
-      
+
       - name: Run the bot
         env:
           APIFY_API_TOKEN: ${{ secrets.APIFY_API_TOKEN }}
@@ -31,11 +36,13 @@ jobs:
           EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
           EMAIL_TO: ${{ secrets.EMAIL_TO }}
         run: python main.py
-      
+
       - name: Commit archive updates
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
           git add archive.json
+          # Only commit if there are actual changes to the archive
           git diff --staged --quiet || git commit -m "Update news archive [skip ci]"
-          git push https://${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git HEAD:main
+          # Push using the default GitHub token
+          git push origin HEAD:main
