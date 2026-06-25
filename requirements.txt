@@ -2,4 +2,5 @@ requests
 beautifulsoup4
 python-dateutil
 groq
-pyTelegramBotAPI
+apify-client
+resend
