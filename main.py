@@ -13,7 +13,7 @@ import resend
 from collections import defaultdict
 import urllib3
 
-# Disable SSL warnings for problematic sites
+# Disable SSL warnings for problematic corporate sites
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # Configure logging
@@ -23,46 +23,76 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 # SECTION 1: CONFIGURATION & LIMITS
 # =====================================================================
 
-# Companies to track (official newsroom URLs)
+# Official Corporate & Investor Relations Pages
 COMPANIES_TO_TRACK = {
-    "BW Group": "https://www.bw-group.com/news",
-    "BW Digital": "https://www.bw-digital.com/news/",
-    "BW Dry Cargo": "https://bwdrycargo.com/news",
-    "BW Energy": "https://www.bwenergy.no/en/news-and-media/",
-    "BW ESS": "https://bw-ess.com/news",
-    "BW Epic Kosan": "https://bwek.com/media/latest-news/",
-    "BW Ideol": "https://www.bw-ideol.com/en/latest-news",
-    "BW LNG": "https://bwlng.com/news",
-    "BW LPG": "https://www.bwlpg.com/media/press-releases/",
-    "BW Offshore": "https://bwoffshore.com/news-media",
-    "BW Water": "https://bw-water.com/news/",
-    "Cadeler": "https://www.cadeler.com/news",
-    "Corvus Energy": "https://corvusenergy.com/news",
-    "Hafnia": "https://hafnia.com/news/",
-    "Navigator Gas": "https://navigatorgas.com/news/",
+    "BW Group (Press Releases)": "https://bw-group.com/newsroom?category=Press%20Release",
+    "BW Group (All News)": "https://bw-group.com/newsroom",
+    "BW Offshore (IR)": "https://www.bwoffshore.com/investors/press-releases",
+    "BW Offshore (News)": "https://www.bwoffshore.com/news",
+    "BW LNG (News)": "https://bw-group.com/newsroom?category=News&company=BW%20LNG",
+    "BW LPG (Press Releases)": "https://www.bwlpg.com/press-releases",
+    "BW LPG (Stock Announcements)": "https://www.bwlpg.com/investors/stock-exchange-announcements",
+    "BW Epic Kosan (News)": "https://bwek.com/news",
+    "BW Energy (Press Releases)": "https://www.bwenergy.no/news-and-media?category=press-releases",
+    "BW Energy (All News)": "https://www.bwenergy.no/news-and-media",
+    "Hafnia (Press Releases)": "https://investor.hafnia.com/news-events/press-releases",
+    "Hafnia (Stock Announcements)": "https://investor.hafnia.com/news-events/stock-exchange-announcements",
+    "Navigator Gas (Press Releases)": "https://investors.navigatorgas.com/news-events/press-releases",
+    "Cadeler (Press Releases)": "https://ir.cadeler.com/news-events/press-releases",
+    "BW Dry Cargo (News)": "https://bw-group.com/newsroom?category=News&company=BW%20Dry%20Cargo",
+    "BW Water (News)": "https://bw-group.com/newsroom?category=News&company=BW%20Water",
+    "BW Ideol (Financial)": "https://bw-ideol.com/category/financial-press-releases",
+    "BW Digital (News)": "https://bw-group.com/newsroom?category=News&company=BW%20Digital",
+    "BW ESS (News)": "https://bw-ess.com/news",
+    "Corvus Energy (News)": "https://corvusenergy.com/news",
 }
 
-# LinkedIn company pages to track
+# Third-Party Industry & Financial Sources
+THIRD_PARTY_SOURCES = {
+    "TradeWinds (BW Group)": "https://www.tradewindsnews.com/search?q=BW+Group",
+    "TradeWinds (Hafnia)": "https://www.tradewindsnews.com/search?q=Hafnia",
+    "Splash247 (BW Group)": "https://splash247.com/search/BW+Group",
+    "World Ports (BW Group)": "https://www.worldports.org/search?q=BW+Group",
+    "Maritime Executive (BW Group)": "https://maritime-executive.com/search?q=BW+Group",
+    "Bloomberg (BW Group)": "https://www.bloomberg.com/search?query=BW+Group",
+    "Reuters (BW Group)": "https://www.reuters.com/search/news?blob=BW+Group",
+    "Finansavisen (Hafnia)": "https://finansavisen.no/search?q=Hafnia",
+    "Bunker Index (Hafnia)": "https://bunkerindex.com/news/?search=Hafnia",
+    "GlobeNewswire (BW Offshore)": "https://www.globenewswire.com/search?q=BW+Offshore",
+}
+
+# LinkedIn company pages to track (All 15 subsidiaries)
 LINKEDIN_COMPANIES = [
     "https://www.linkedin.com/company/bw-group/",
-    "https://www.linkedin.com/company/hafnia/",
     "https://www.linkedin.com/company/bw-offshore/",
+    "https://www.linkedin.com/company/bw-lpg/",
     "https://www.linkedin.com/company/bw-lng/",
+    "https://www.linkedin.com/company/hafnia/",
+    "https://www.linkedin.com/company/bw-energy/",
+    "https://www.linkedin.com/company/navigator-gas/",
+    "https://www.linkedin.com/company/cadeler/",
+    "https://www.linkedin.com/company/bw-dry-cargo/",
+    "https://www.linkedin.com/company/bw-epic-kosan/",
+    "https://www.linkedin.com/company/bw-water/",
+    "https://www.linkedin.com/company/bw-ideol/",
+    "https://www.linkedin.com/company/bw-digital/",
+    "https://www.linkedin.com/company/bw-ess/",
+    "https://www.linkedin.com/company/corvus-energy/",
 ]
 
-# API Keys
+# API Keys (Loaded from GitHub Secrets)
 APIFY_API_TOKEN = os.getenv("APIFY_API_TOKEN")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 RESEND_API_KEY = os.getenv("RESEND_API_KEY")
 EMAIL_FROM = os.getenv("EMAIL_FROM", "news@yourdomain.com")
-EMAIL_TO = os.getenv("EMAIL_TO", "vernonlee37@gmail.com") # Keep it your email for testing!
+EMAIL_TO = os.getenv("EMAIL_TO", "vernonlee37@gmail.com") # Keep your email for testing!
 
 # Archive file path
 ARCHIVE_FILE = "archive.json"
 
 # SCRAPING LIMITS (To protect Apify free tier and LLM context)
 MAX_LINKEDIN_POSTS = 30  # Max posts per company on LinkedIn
-MAX_WEBSITE_ARTICLES = 15 # Max articles per company on websites
+MAX_WEBSITE_ARTICLES = 15 # Max articles per source on websites
 
 # =====================================================================
 # SECTION 2: DATE LOGIC (Weekly: Last 7 days)
@@ -104,7 +134,8 @@ def get_article_links(main_url):
         links = set()
         for a in soup.find_all('a', href=True):
             href = a['href']
-            if any(x in href.lower() for x in ['facebook', 'twitter', 'linkedin', 'mailto:', '#', '.pdf', '.jpg', 'tradingview', 'widget', 'iframe', 'youtube']):
+            # Ignore social links, emails, downloads, and embedded widgets
+            if any(x in href.lower() for x in ['facebook', 'twitter', 'linkedin', 'mailto:', '#', '.pdf', '.jpg', '.png', 'tradingview', 'widget', 'iframe', 'youtube', 'javascript:', 'cookie']):
                 continue
             full_url = urljoin(main_url, href)
             if len(href.split('/')) > 2:
@@ -155,22 +186,26 @@ def extract_article_data(article_url):
         return None
 
 def scrape_websites():
+    """Scrape all official company websites AND third-party industry sources."""
     start_date, end_date = get_date_range()
     logging.info(f"Scraping websites from {start_date} to {end_date}")
     collected_news = []
     
-    for company_name, news_url in COMPANIES_TO_TRACK.items():
-        logging.info(f"Scanning {company_name}...")
+    # Combine both dictionaries so the bot scrapes everything
+    all_sources = {**COMPANIES_TO_TRACK, **THIRD_PARTY_SOURCES}
+    
+    for source_name, news_url in all_sources.items():
+        logging.info(f"Scanning {source_name}...")
         links = get_article_links(news_url)
         company_article_count = 0
         
         for link in links:
             if company_article_count >= MAX_WEBSITE_ARTICLES:
-                break # Stop scraping this company if we hit the limit
+                break # Stop scraping this source if we hit the limit
                 
             data = extract_article_data(link)
             if data and data['date'] and start_date <= data['date'] <= end_date:
-                data['company'] = company_name
+                data['company'] = source_name 
                 collected_news.append(data)
                 company_article_count += 1
                 logging.info(f"  Found: {data['title']}")
