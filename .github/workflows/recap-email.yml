@@ -1,0 +1,38 @@
+name: Send Archive Recap Email
+
+on:
+  workflow_dispatch:
+    inputs:
+      days_back:
+        description: 'Days to include (leave empty for all time)'
+        required: false
+        type: number
+
+jobs:
+  send-recap:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install requests resend groq
+
+      - name: Run recap email script
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
+          EMAIL_TO: ${{ secrets.EMAIL_TO }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ "${{ github.event.inputs.days_back }}" != "" ]; then
+            python recap_email.py --days ${{ github.event.inputs.days_back }}
+          else
+            python recap_email.py
+          fi
