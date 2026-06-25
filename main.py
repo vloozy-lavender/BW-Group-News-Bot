@@ -104,7 +104,7 @@ def get_article_links(main_url):
         links = set()
         for a in soup.find_all('a', href=True):
             href = a['href']
-            if any(x in href.lower() for x in ['facebook', 'twitter', 'linkedin', 'mailto:', '#', '.pdf', '.jpg']):
+            if any(x in href.lower() for x in ['facebook', 'twitter', 'linkedin', 'mailto:', '#', '.pdf', '.jpg', 'tradingview', 'widget', 'iframe', 'youtube']):
                 continue
             full_url = urljoin(main_url, href)
             if len(href.split('/')) > 2:
