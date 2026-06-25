@@ -145,7 +145,7 @@ def get_article_links(main_url):
         logging.error(f"Failed to get links from {main_url}: {e}")
         return []
 
-def extract_article_data(article_url):
+def extract_article_data(article_url, source_name=""):
     try:
         headers = {'User-Agent': 'Mozilla/5.0'}
         resp = requests.get(article_url, timeout=15, headers=headers, verify=False)
@@ -163,7 +163,6 @@ def extract_article_data(article_url):
                 try: pub_date = date_parser.parse(time_tag['datetime']).date()
                 except: pass
 
-        # Safer title extraction
         title = soup.title.get_text(strip=True) if soup.title else "No Title"
         og_title = soup.find('meta', property='og:title')
         if og_title and og_title.get('content'):
@@ -174,10 +173,19 @@ def extract_article_data(article_url):
         paragraphs = soup.find_all('p')
         text = "\n".join([p.get_text(strip=True) for p in paragraphs if len(p.get_text(strip=True)) > 20])
         
+        # --- RELEVANCE FILTER (Blocks sidebar ads on search pages) ---
+        # If it's a third-party search page, it MUST contain maritime/BW keywords
+        if any(x in source_name.lower() for x in ['splash247', 'globenewswire', 'tradewinds', 'bloomberg', 'reuters', 'finansavisen', 'bunker']):
+            combined_text = (title + " " + text).lower()
+            if not any(kw in combined_text for kw in ['bw ', 'bw-', 'hafnia', 'cadeler', 'corvus', 'navigator', 'offshore', 'lng', 'lpg', 'shipping', 'maritime', 'vessel', 'tanker', 'sohmen-pao']):
+                logging.info(f"  Skipping irrelevant ad/article from {source_name}: {title}")
+                return None
+        # -------------------------------------------------------------
+
         return {
             'url': article_url,
             'title': title,
-            'date': pub_date, # Kept as date object for comparison
+            'date': pub_date,
             'text': text[:500],
             'source': 'website'
         }
