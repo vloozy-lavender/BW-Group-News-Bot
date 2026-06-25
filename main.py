@@ -211,7 +211,7 @@ def scrape_websites():
             if company_article_count >= MAX_WEBSITE_ARTICLES:
                 break # Stop scraping this source if we hit the limit
                 
-            data = extract_article_data(link)
+            data = extract_article_data(link, source_name)
             if data and data['date'] and start_date <= data['date'] <= end_date:
                 data['company'] = source_name 
                 collected_news.append(data)
