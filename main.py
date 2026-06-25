@@ -156,7 +156,7 @@ def extract_article_data(article_url):
         return {
             'url': article_url,
             'title': title,
-            'date': pub_date,
+            'date': str(pub_date) if pub_date else None,  # <--- ADD str() HERE
             'text': text[:500],
             'source': 'website'
         }
@@ -213,6 +213,7 @@ def scrape_linkedin():
         # Parse the post date
         try:
             post_date = date_parser.parse(item.get('date', '')).date()
+            logging.info(f"  DEBUG: Found LinkedIn post dated {post_date}")
         except:
             continue
         
@@ -225,7 +226,7 @@ def scrape_linkedin():
             collected_posts.append({
                 'url': item.get('url', ''),
                 'title': item.get('text', '')[:100] + "..." if len(item.get('text', '')) > 100 else item.get('text', ''),
-                'date': post_date,
+                'date': str(post_date) if post_date else None,  # <--- ADD str() HERE
                 'text': item.get('text', '')[:500],
                 'company': company_name.title(),
                 'source': 'linkedin'
