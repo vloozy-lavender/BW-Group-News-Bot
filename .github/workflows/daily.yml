@@ -1,12 +1,10 @@
 name: Weekly BW News Digest
 
-# This gives the bot permission to push the archive.json file back to the repo
 permissions:
   contents: write
 
 on:
   schedule:
-    # Runs at 8:00 AM UTC every Friday
     - cron: '0 8 * * 5'
   workflow_dispatch:
 
@@ -17,8 +15,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          # This ensures the bot can use the token to push later
-          persist-credentials: true 
+          persist-credentials: true
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -27,6 +24,9 @@ jobs:
 
       - name: Install dependencies
         run: pip install -r requirements.txt
+
+      - name: Install Playwright browsers
+        run: playwright install chromium
 
       - name: Run the bot
         env:
@@ -41,14 +41,6 @@ jobs:
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
-
-            - name: Install dependencies
-        run: pip install -r requirements.txt
-
-      - name: Install Playwright browsers
-        run: playwright install chromium
           git add archive.json
-          # Only commit if there are actual changes to the archive
           git diff --staged --quiet || git commit -m "Update news archive [skip ci]"
-          # Push using the default GitHub token
           git push origin HEAD:main
