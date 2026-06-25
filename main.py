@@ -27,19 +27,17 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 # SECTION 1: CONFIGURATION & LIMITS
 # =====================================================================
 
-# RSS Feeds (Fastest - from DeepSeek research)
-# Update these URLs based on what DeepSeek finds
-RSS_FEEDS = {
-    "BW Group": "https://bw-group.com/feed",  # Example - update with real URLs
-    "BW Offshore": "https://www.bwoffshore.com/investors/press-releases/rss",
-    "BW LPG": "https://www.bwlpg.com/press-releases/rss",
-    "Hafnia": "https://investor.hafnia.com/news-events/press-releases/rss",
-    # Add more as DeepSeek finds them. Set to None if no RSS feed exists.
-}
+# RSS Feeds - NONE FOUND (all companies lack RSS feeds)
+RSS_FEEDS = {}
 
 # Sites to scrape with cloudscraper (bypasses basic Cloudflare)
+# These are faster and work on 80% of corporate sites
 CLOUDSCRAPER_SITES = {
+    "BW Group": "https://bw-group.com/newsroom",
+    "BW Offshore": "https://www.bwoffshore.com/investors/press-releases",
+    "BW LPG": "https://www.bwlpg.com/press-releases",
     "BW Energy": "https://www.bwenergy.no/news-and-media?category=press-releases",
+    "Hafnia": "https://investor.hafnia.com/news-events/press-releases",
     "Navigator Gas": "https://investors.navigatorgas.com/news-events/press-releases",
     "Cadeler": "https://ir.cadeler.com/news-events/press-releases",
     "BW Epic Kosan": "https://bwek.com/news",
@@ -49,12 +47,11 @@ CLOUDSCRAPER_SITES = {
 }
 
 # Sites that need Playwright (heavy JavaScript - last resort)
-PLAYWRIGHT_SITES = {
-    # Add any sites that cloudscraper fails on
-    # Example: "BW Digital": "https://bw-group.com/newsroom?category=News&company=BW%20Digital",
-}
+# Leave this empty for now. If cloudscraper fails on any site above,
+# we'll move it here after testing.
+PLAYWRIGHT_SITES = {}
 
-# LinkedIn company pages (via Apify)
+# LinkedIn company pages (via Apify - already working)
 LINKEDIN_COMPANIES = [
     "https://www.linkedin.com/company/bw-group/",
     "https://www.linkedin.com/company/bw-offshore/",
