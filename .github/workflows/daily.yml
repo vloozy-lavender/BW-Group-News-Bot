@@ -1,27 +1,41 @@
-name: Daily BW Group News
+name: Weekly BW News Digest
 
 on:
   schedule:
-    # Runs once a day at 08:00 UTC. 
-    # TWEAK THIS: Change '0 8' to your preferred hour (24h format).
-    - cron: '0 8 * * *'
-  workflow_dispatch: # Allows you to click "Run" manually in GitHub to test it
+    # Runs at 8:00 AM UTC every Friday
+    - cron: '0 8 * * 5'
+  workflow_dispatch:
 
 jobs:
-  run-bot:
+  run-news-bot:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-          
+      
       - name: Install dependencies
         run: pip install -r requirements.txt
-        
-      - name: Run News Bot
+      
+      - name: Run the bot
         env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          APIFY_API_TOKEN: ${{ secrets.APIFY_API_TOKEN }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
+          EMAIL_TO: ${{ secrets.EMAIL_TO }}
         run: python main.py
+      
+      - name: Commit archive updates
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add archive.json
+          git diff --staged --quiet || git commit -m "Update news archive [skip ci]"
+          git push https://${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git HEAD:main
