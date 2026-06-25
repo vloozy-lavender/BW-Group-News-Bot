@@ -320,23 +320,21 @@ def process_with_groq_concurrent(all_items):
 # =====================================================================
 
 def generate_html_email(processed_items, start_date, end_date):
-    # Group by Category instead of Company
+    # Group by Category
     grouped = defaultdict(list)
     for item in processed_items:
         cat = item.get('category', 'General News')
         grouped[cat].append(item)
         
-    # Define the order of categories
     category_order = ["New Development", "Progress/Update", "People Mentioned", "General News"]
     
-    # Email Client Safe HTML Table Styles
     table_style = 'border="1" cellpadding="10" cellspacing="0" style="border-collapse: collapse; width: 100%; font-family: Arial, sans-serif; font-size: 14px; color: #333; border-color: #ddd;"'
     th_style = 'style="background-color: #f4f4f4; text-align: left; padding: 10px; border: 1px solid #ddd;"'
     td_style = 'style="padding: 10px; border: 1px solid #ddd; vertical-align: top;"'
 
     html = f"""
     <html>
-    <body style="font-family: Arial, sans-serif; line-height: 1.5; color: #333; max-width: 800px; margin: 0 auto;">
+    <body style="font-family: Arial, sans-serif; line-height: 1.5; color: #333; max-width: 900px; margin: 0 auto;">
         <h1 style="color: #003366; font-size: 24px; margin-bottom: 5px;">BW Group Weekly Intelligence Digest</h1>
         <p style="color: #666; font-size: 14px; margin-top: 0;">
             <strong>Week of:</strong> {start_date.strftime('%b %d')} - {end_date.strftime('%b %d, %Y')}<br>
@@ -350,14 +348,24 @@ def generate_html_email(processed_items, start_date, end_date):
         if not items:
             continue
             
-        # Sort items by company name inside the table
-        items.sort(key=lambda x: x['company'])
+        # SORT BY DATE DESCENDING (Newest first)
+        items.sort(key=lambda x: x.get('date', '1970-01-01'), reverse=True)
         
         html += f"<h2 style='color: #0066cc; font-size: 18px; border-bottom: 2px solid #0066cc; padding-bottom: 5px; margin-top: 30px;'>{category} ({len(items)})</h2>"
         html += f"<table {table_style}>"
-        html += f"<tr><th {th_style}>Company</th><th {th_style}>Headline & Summary</th><th {th_style}>Link</th></tr>"
+        
+        # ADDED DATE COLUMN HEADER
+        html += f"<tr><th {th_style} style='width: 10%;'>Date</th><th {th_style} style='width: 15%;'>Company</th><th {th_style} style='width: 55%;'>Headline & Summary</th><th {th_style} style='width: 20%;'>Link</th></tr>"
         
         for item in items:
+            # Format date nicely (e.g., "Jun 24")
+            raw_date = item.get('date', '')
+            try:
+                date_obj = datetime.strptime(raw_date, '%Y-%m-%d')
+                formatted_date = date_obj.strftime('%b %d')
+            except:
+                formatted_date = raw_date
+                
             headline = item.get('headline', 'No Headline')
             summary = item.get('summary', 'No summary.')
             url = item.get('url', '#')
@@ -365,8 +373,9 @@ def generate_html_email(processed_items, start_date, end_date):
             
             html += f"""
             <tr>
+                <td {td_style} style="width: 10%; white-space: nowrap; color: #666; font-size: 13px;">{formatted_date}</td>
                 <td {td_style} style="font-weight: bold; width: 15%; background-color: #fafafa;">{company}</td>
-                <td {td_style} style="width: 65%;">
+                <td {td_style} style="width: 55%;">
                     <strong style="font-size: 15px;">{headline}</strong><br>
                     <span style="color: #555; font-size: 13px;">{summary}</span>
                 </td>
@@ -386,22 +395,6 @@ def generate_html_email(processed_items, start_date, end_date):
     </html>
     """
     return html
-
-def send_email(html_content, start_date, end_date):
-    resend.api_key = RESEND_API_KEY
-    subject = f"BW Group Weekly Digest: {len(html_content.split('<tr>'))-1} Updates ({start_date.strftime('%b %d')} - {end_date.strftime('%b %d')})"
-    
-    try:
-        params = {
-            "from": EMAIL_FROM,
-            "to": EMAIL_TO,
-            "subject": subject,
-            "html": html_content,
-        }
-        email = resend.Emails.send(params)
-        logging.info(f"Email sent successfully: {email}")
-    except Exception as e:
-        logging.error(f"Failed to send email: {e}")
 
 # =====================================================================
 # SECTION 8: MAIN EXECUTION
