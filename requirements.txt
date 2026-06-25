@@ -4,3 +4,6 @@ python-dateutil
 groq
 apify-client
 resend
+cloudscraper
+feedparser
+playwright
