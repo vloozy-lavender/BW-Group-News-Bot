@@ -3,6 +3,7 @@ import json
 import logging
 import requests
 import concurrent.futures
+import re
 from bs4 import BeautifulSoup
 from datetime import datetime, timedelta
 from dateutil import parser as date_parser
@@ -12,8 +13,11 @@ from apify_client import ApifyClient
 import resend
 from collections import defaultdict
 import urllib3
+import cloudscraper
+import feedparser
+from playwright.sync_api import sync_playwright
 
-# Disable SSL warnings for problematic corporate sites
+# Disable SSL warnings
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # Configure logging
@@ -23,45 +27,34 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 # SECTION 1: CONFIGURATION & LIMITS
 # =====================================================================
 
-# Official Corporate & Investor Relations Pages
-COMPANIES_TO_TRACK = {
-    "BW Group (Press Releases)": "https://bw-group.com/newsroom?category=Press%20Release",
-    "BW Group (All News)": "https://bw-group.com/newsroom",
-    "BW Offshore (IR)": "https://www.bwoffshore.com/investors/press-releases",
-    "BW Offshore (News)": "https://www.bwoffshore.com/news",
-    "BW LNG (News)": "https://bw-group.com/newsroom?category=News&company=BW%20LNG",
-    "BW LPG (Press Releases)": "https://www.bwlpg.com/press-releases",
-    "BW LPG (Stock Announcements)": "https://www.bwlpg.com/investors/stock-exchange-announcements",
-    "BW Epic Kosan (News)": "https://bwek.com/news",
-    "BW Energy (Press Releases)": "https://www.bwenergy.no/news-and-media?category=press-releases",
-    "BW Energy (All News)": "https://www.bwenergy.no/news-and-media",
-    "Hafnia (Press Releases)": "https://investor.hafnia.com/news-events/press-releases",
-    "Hafnia (Stock Announcements)": "https://investor.hafnia.com/news-events/stock-exchange-announcements",
-    "Navigator Gas (Press Releases)": "https://investors.navigatorgas.com/news-events/press-releases",
-    "Cadeler (Press Releases)": "https://ir.cadeler.com/news-events/press-releases",
-    "BW Dry Cargo (News)": "https://bw-group.com/newsroom?category=News&company=BW%20Dry%20Cargo",
-    "BW Water (News)": "https://bw-group.com/newsroom?category=News&company=BW%20Water",
-    "BW Ideol (Financial)": "https://bw-ideol.com/category/financial-press-releases",
-    "BW Digital (News)": "https://bw-group.com/newsroom?category=News&company=BW%20Digital",
-    "BW ESS (News)": "https://bw-ess.com/news",
-    "Corvus Energy (News)": "https://corvusenergy.com/news",
+# RSS Feeds (Fastest - from DeepSeek research)
+# Update these URLs based on what DeepSeek finds
+RSS_FEEDS = {
+    "BW Group": "https://bw-group.com/feed",  # Example - update with real URLs
+    "BW Offshore": "https://www.bwoffshore.com/investors/press-releases/rss",
+    "BW LPG": "https://www.bwlpg.com/press-releases/rss",
+    "Hafnia": "https://investor.hafnia.com/news-events/press-releases/rss",
+    # Add more as DeepSeek finds them. Set to None if no RSS feed exists.
 }
 
-# Third-Party Industry & Financial Sources
-THIRD_PARTY_SOURCES = {
-    "TradeWinds (BW Group)": "https://www.tradewindsnews.com/search?q=BW+Group",
-    "TradeWinds (Hafnia)": "https://www.tradewindsnews.com/search?q=Hafnia",
-    "Splash247 (BW Group)": "https://splash247.com/search/BW+Group",
-    "World Ports (BW Group)": "https://www.worldports.org/search?q=BW+Group",
-    "Maritime Executive (BW Group)": "https://maritime-executive.com/search?q=BW+Group",
-    "Bloomberg (BW Group)": "https://www.bloomberg.com/search?query=BW+Group",
-    "Reuters (BW Group)": "https://www.reuters.com/search/news?blob=BW+Group",
-    "Finansavisen (Hafnia)": "https://finansavisen.no/search?q=Hafnia",
-    "Bunker Index (Hafnia)": "https://bunkerindex.com/news/?search=Hafnia",
-    "GlobeNewswire (BW Offshore)": "https://www.globenewswire.com/search?q=BW+Offshore",
+# Sites to scrape with cloudscraper (bypasses basic Cloudflare)
+CLOUDSCRAPER_SITES = {
+    "BW Energy": "https://www.bwenergy.no/news-and-media?category=press-releases",
+    "Navigator Gas": "https://investors.navigatorgas.com/news-events/press-releases",
+    "Cadeler": "https://ir.cadeler.com/news-events/press-releases",
+    "BW Epic Kosan": "https://bwek.com/news",
+    "BW Ideol": "https://bw-ideol.com/category/financial-press-releases",
+    "BW ESS": "https://bw-ess.com/news",
+    "Corvus Energy": "https://corvusenergy.com/news",
 }
 
-# LinkedIn company pages to track (All 15 subsidiaries)
+# Sites that need Playwright (heavy JavaScript - last resort)
+PLAYWRIGHT_SITES = {
+    # Add any sites that cloudscraper fails on
+    # Example: "BW Digital": "https://bw-group.com/newsroom?category=News&company=BW%20Digital",
+}
+
+# LinkedIn company pages (via Apify)
 LINKEDIN_COMPANIES = [
     "https://www.linkedin.com/company/bw-group/",
     "https://www.linkedin.com/company/bw-offshore/",
@@ -80,22 +73,18 @@ LINKEDIN_COMPANIES = [
     "https://www.linkedin.com/company/corvus-energy/",
 ]
 
-# API Keys (Loaded from GitHub Secrets)
+# API Keys
 APIFY_API_TOKEN = os.getenv("APIFY_API_TOKEN")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 RESEND_API_KEY = os.getenv("RESEND_API_KEY")
 EMAIL_FROM = os.getenv("EMAIL_FROM", "news@yourdomain.com")
-EMAIL_TO = os.getenv("EMAIL_TO", "vernonlee37@gmail.com") 
+EMAIL_TO = os.getenv("EMAIL_TO", "vernonlee37@gmail.com")
 
-# Archive file path
 ARCHIVE_FILE = "archive.json"
-
-# SCRAPING LIMITS
 MAX_LINKEDIN_POSTS = 30
-MAX_WEBSITE_ARTICLES = 15
 
 # =====================================================================
-# SECTION 2: DATE LOGIC (Weekly: Last 7 days)
+# SECTION 2: DATE LOGIC
 # =====================================================================
 
 def get_date_range():
@@ -105,7 +94,7 @@ def get_date_range():
     return start_date, end_date
 
 # =====================================================================
-# SECTION 3: ARCHIVE MANAGEMENT (Deduplication)
+# SECTION 3: ARCHIVE MANAGEMENT
 # =====================================================================
 
 def load_archive():
@@ -122,102 +111,192 @@ def is_new_item(url, archive):
     return not any(item['url'] == url for item in archive)
 
 # =====================================================================
-# SECTION 4: WEBSITE SCRAPING
+# SECTION 4: TIER 1 - RSS FEED SCRAPING (Fastest)
 # =====================================================================
 
-def get_article_links(main_url):
-    try:
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
-        resp = requests.get(main_url, timeout=15, headers=headers, verify=False)
-        soup = BeautifulSoup(resp.text, 'html.parser')
-        
-        links = set()
-        for a in soup.find_all('a', href=True):
-            href = a['href']
-            if any(x in href.lower() for x in ['facebook', 'twitter', 'linkedin', 'mailto:', '#', '.pdf', '.jpg', '.png', 'tradingview', 'widget', 'iframe', 'youtube', 'javascript:', 'cookie']):
-                continue
-            full_url = urljoin(main_url, href)
-            if len(href.split('/')) > 2:
-                links.add(full_url)
-        return list(links)
-    except Exception as e:
-        logging.error(f"Failed to get links from {main_url}: {e}")
-        return []
-
-def extract_article_data(article_url, source_name=""):
-    try:
-        headers = {'User-Agent': 'Mozilla/5.0'}
-        resp = requests.get(article_url, timeout=15, headers=headers, verify=False)
-        soup = BeautifulSoup(resp.text, 'html.parser')
-        
-        pub_date = None
-        meta_date = soup.find('meta', property='article:published_time')
-        if meta_date and meta_date.get('content'):
-            try: pub_date = date_parser.parse(meta_date['content']).date()
-            except: pass
-        
-        if not pub_date:
-            time_tag = soup.find('time')
-            if time_tag and time_tag.get('datetime'):
-                try: pub_date = date_parser.parse(time_tag['datetime']).date()
-                except: pass
-
-        title = soup.title.get_text(strip=True) if soup.title else "No Title"
-        og_title = soup.find('meta', property='og:title')
-        if og_title and og_title.get('content'):
-            title = og_title['content'].strip()
-        
-        for element in soup(["script", "style", "nav", "header", "footer"]):
-            element.extract()
-        paragraphs = soup.find_all('p')
-        text = "\n".join([p.get_text(strip=True) for p in paragraphs if len(p.get_text(strip=True)) > 20])
-        
-        # --- RELEVANCE FILTER (Blocks sidebar ads on search pages) ---
-        if any(x in source_name.lower() for x in ['splash247', 'globenewswire', 'tradewinds', 'bloomberg', 'reuters', 'finansavisen', 'bunker']):
-            combined_text = (title + " " + text).lower()
-            if not any(kw in combined_text for kw in ['bw ', 'bw-', 'hafnia', 'cadeler', 'corvus', 'navigator', 'offshore', 'lng', 'lpg', 'shipping', 'maritime', 'vessel', 'tanker', 'sohmen-pao']):
-                logging.info(f"  Skipping irrelevant ad/article from {source_name}: {title}")
-                return None
-        # -------------------------------------------------------------
-
-        return {
-            'url': article_url,
-            'title': title,
-            'date': pub_date,
-            'text': text[:500],
-            'source': 'website'
-        }
-    except Exception as e:
-        logging.error(f"Failed to process {article_url}: {e}")
-        return None
-
-def scrape_websites():
+def scrape_rss_feeds():
+    """Scrape news from RSS feeds. This is instant and 100% reliable."""
     start_date, end_date = get_date_range()
-    logging.info(f"Scraping websites from {start_date} to {end_date}")
+    logging.info(f"Scraping RSS feeds from {start_date} to {end_date}")
     collected_news = []
     
-    all_sources = {**COMPANIES_TO_TRACK, **THIRD_PARTY_SOURCES}
-    
-    for source_name, news_url in all_sources.items():
-        logging.info(f"Scanning {source_name}...")
-        links = get_article_links(news_url)
-        company_article_count = 0
-        
-        for link in links:
-            if company_article_count >= MAX_WEBSITE_ARTICLES:
-                break
+    for company_name, rss_url in RSS_FEEDS.items():
+        if not rss_url:
+            continue
+            
+        logging.info(f"Reading RSS feed for {company_name}...")
+        try:
+            feed = feedparser.parse(rss_url)
+            for entry in feed.entries:
+                # Extract date
+                pub_date = None
+                if hasattr(entry, 'published_parsed') and entry.published_parsed:
+                    pub_date = datetime(*entry.published_parsed[:6]).date()
+                elif hasattr(entry, 'updated_parsed') and entry.updated_parsed:
+                    pub_date = datetime(*entry.updated_parsed[:6]).date()
                 
-            data = extract_article_data(link, source_name)
-            if data and data['date'] and start_date <= data['date'] <= end_date:
-                data['company'] = source_name 
-                collected_news.append(data)
-                company_article_count += 1
-                logging.info(f"  Found: {data['title']}")
+                if pub_date and start_date <= pub_date <= end_date:
+                    title = entry.get('title', 'No Title')
+                    link = entry.get('link', '')
+                    summary = entry.get('summary', '')[:500]
+                    
+                    collected_news.append({
+                        'url': link,
+                        'title': title,
+                        'date': pub_date,
+                        'text': summary,
+                        'company': company_name,
+                        'source': 'rss'
+                    })
+                    logging.info(f"  Found via RSS: {title}")
+        except Exception as e:
+            logging.error(f"Failed to read RSS feed for {company_name}: {e}")
     
+    logging.info(f"Found {len(collected_news)} articles via RSS")
     return collected_news
 
 # =====================================================================
-# SECTION 5: LINKEDIN SCRAPING VIA APIFY
+# SECTION 5: TIER 2 - CLOUDSCRAPER (Bypasses basic Cloudflare)
+# =====================================================================
+
+def scrape_with_cloudscraper():
+    """Use cloudscraper to bypass basic anti-bot security."""
+    start_date, end_date = get_date_range()
+    logging.info(f"Scraping with cloudscraper from {start_date} to {end_date}")
+    collected_news = []
+    
+    scraper = cloudscraper.create_scraper()
+    
+    for company_name, news_url in CLOUDSCRAPER_SITES.items():
+        logging.info(f"Scanning {company_name} with cloudscraper...")
+        try:
+            resp = scraper.get(news_url, timeout=15)
+            soup = BeautifulSoup(resp.text, 'html.parser')
+            
+            # Find article links
+            for a in soup.find_all('a', href=True):
+                href = a['href']
+                if any(x in href.lower() for x in ['facebook', 'twitter', 'linkedin', 'mailto:', '#', '.pdf', '.jpg', 'tradingview', 'widget']):
+                    continue
+                
+                full_url = urljoin(news_url, href)
+                if len(href.split('/')) > 2:
+                    # Visit the article page
+                    try:
+                        article_resp = scraper.get(full_url, timeout=15)
+                        article_soup = BeautifulSoup(article_resp.text, 'html.parser')
+                        
+                        # Extract date
+                        pub_date = None
+                        meta_date = article_soup.find('meta', property='article:published_time')
+                        if meta_date and meta_date.get('content'):
+                            try: pub_date = date_parser.parse(meta_date['content']).date()
+                            except: pass
+                        
+                        if not pub_date:
+                            time_tag = article_soup.find('time')
+                            if time_tag and time_tag.get('datetime'):
+                                try: pub_date = date_parser.parse(time_tag['datetime']).date()
+                                except: pass
+                        
+                        if pub_date and start_date <= pub_date <= end_date:
+                            title = article_soup.title.get_text(strip=True) if article_soup.title else "No Title"
+                            for element in article_soup(["script", "style", "nav", "header", "footer"]):
+                                element.extract()
+                            paragraphs = article_soup.find_all('p')
+                            text = "\n".join([p.get_text(strip=True) for p in paragraphs if len(p.get_text(strip=True)) > 20])
+                            
+                            collected_news.append({
+                                'url': full_url,
+                                'title': title,
+                                'date': pub_date,
+                                'text': text[:500],
+                                'company': company_name,
+                                'source': 'cloudscraper'
+                            })
+                            logging.info(f"  Found via cloudscraper: {title}")
+                            break  # Only get first article per link to avoid duplicates
+                    except:
+                        continue
+        except Exception as e:
+            logging.error(f"Cloudscraper failed for {company_name}: {e}")
+    
+    logging.info(f"Found {len(collected_news)} articles via cloudscraper")
+    return collected_news
+
+# =====================================================================
+# SECTION 6: TIER 3 - PLAYWRIGHT (Heavy JavaScript sites)
+# =====================================================================
+
+def scrape_with_playwright():
+    """Use Playwright for sites with heavy JavaScript."""
+    start_date, end_date = get_date_range()
+    logging.info(f"Scraping with Playwright from {start_date} to {end_date}")
+    collected_news = []
+    
+    if not PLAYWRIGHT_SITES:
+        logging.info("No Playwright sites configured")
+        return collected_news
+    
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        
+        for company_name, news_url in PLAYWRIGHT_SITES.items():
+            logging.info(f"Scanning {company_name} with Playwright...")
+            try:
+                page.goto(news_url, wait_until='networkidle', timeout=30000)
+                html = page.content()
+                soup = BeautifulSoup(html, 'html.parser')
+                
+                # Find article links and extract data (similar to cloudscraper)
+                for a in soup.find_all('a', href=True):
+                    href = a['href']
+                    if any(x in href.lower() for x in ['facebook', 'twitter', 'linkedin', 'mailto:', '#', '.pdf', '.jpg']):
+                        continue
+                    
+                    full_url = urljoin(news_url, href)
+                    if len(href.split('/')) > 2:
+                        try:
+                            page.goto(full_url, wait_until='networkidle', timeout=30000)
+                            article_html = page.content()
+                            article_soup = BeautifulSoup(article_html, 'html.parser')
+                            
+                            pub_date = None
+                            meta_date = article_soup.find('meta', property='article:published_time')
+                            if meta_date and meta_date.get('content'):
+                                try: pub_date = date_parser.parse(meta_date['content']).date()
+                                except: pass
+                            
+                            if pub_date and start_date <= pub_date <= end_date:
+                                title = article_soup.title.get_text(strip=True) if article_soup.title else "No Title"
+                                for element in article_soup(["script", "style", "nav", "header", "footer"]):
+                                    element.extract()
+                                paragraphs = article_soup.find_all('p')
+                                text = "\n".join([p.get_text(strip=True) for p in paragraphs if len(p.get_text(strip=True)) > 20])
+                                
+                                collected_news.append({
+                                    'url': full_url,
+                                    'title': title,
+                                    'date': pub_date,
+                                    'text': text[:500],
+                                    'company': company_name,
+                                    'source': 'playwright'
+                                })
+                                logging.info(f"  Found via Playwright: {title}")
+                                break
+                        except:
+                            continue
+            except Exception as e:
+                logging.error(f"Playwright failed for {company_name}: {e}")
+        
+        browser.close()
+    
+    logging.info(f"Found {len(collected_news)} articles via Playwright")
+    return collected_news
+
+# =====================================================================
+# SECTION 7: LINKEDIN SCRAPING VIA APIFY
 # =====================================================================
 
 def scrape_linkedin():
@@ -260,7 +339,7 @@ def scrape_linkedin():
     return collected_posts
 
 # =====================================================================
-# SECTION 6: AI PROCESSING (CONCURRENT BATCHING)
+# SECTION 8: AI PROCESSING (CONCURRENT BATCHING)
 # =====================================================================
 
 def process_single_item(item):
@@ -316,7 +395,7 @@ def process_with_groq_concurrent(all_items):
     return processed_items
 
 # =====================================================================
-# SECTION 7: HTML TABLE EMAIL GENERATION & DELIVERY
+# SECTION 9: HTML TABLE EMAIL GENERATION & DELIVERY
 # =====================================================================
 
 def generate_html_email(processed_items, start_date, end_date):
@@ -347,13 +426,10 @@ def generate_html_email(processed_items, start_date, end_date):
         if not items:
             continue
             
-        # SORT BY DATE DESCENDING (Newest first)
         items.sort(key=lambda x: x.get('date', '1970-01-01'), reverse=True)
         
         html += f"<h2 style='color: #0066cc; font-size: 18px; border-bottom: 2px solid #0066cc; padding-bottom: 5px; margin-top: 30px;'>{category} ({len(items)})</h2>"
         html += f"<table {table_style}>"
-        
-        # ADDED DATE COLUMN HEADER
         html += f"<tr><th {th_style} style='width: 10%;'>Date</th><th {th_style} style='width: 15%;'>Company</th><th {th_style} style='width: 55%;'>Headline & Summary</th><th {th_style} style='width: 20%;'>Link</th></tr>"
         
         for item in items:
@@ -411,23 +487,31 @@ def send_email(html_content, start_date, end_date):
         logging.error(f"Failed to send email: {e}")
 
 # =====================================================================
-# SECTION 8: MAIN EXECUTION
+# SECTION 10: MAIN EXECUTION
 # =====================================================================
 
 def main():
-    logging.info("Starting BW Group Weekly News Bot...")
+    logging.info("Starting BW Group Weekly News Bot (Hybrid Mode)...")
     
     archive = load_archive()
     logging.info(f"Archive contains {len(archive)} previously sent items")
     
-    website_news = scrape_websites()
-    logging.info(f"Found {len(website_news)} website articles")
+    # TIER 1: RSS Feeds (Fastest)
+    rss_news = scrape_rss_feeds()
     
+    # TIER 2: Cloudscraper (Bypasses basic security)
+    cloudscraper_news = scrape_with_cloudscraper()
+    
+    # TIER 3: Playwright (Heavy JS sites)
+    playwright_news = scrape_with_playwright()
+    
+    # LinkedIn (via Apify)
     linkedin_posts = scrape_linkedin()
-    logging.info(f"Found {len(linkedin_posts)} LinkedIn posts")
     
-    all_items = website_news + linkedin_posts
+    # Combine all sources
+    all_items = rss_news + cloudscraper_news + playwright_news + linkedin_posts
     
+    # Deduplicate
     new_items = [item for item in all_items if is_new_item(item['url'], archive)]
     logging.info(f"After deduplication: {len(new_items)} new items")
     
@@ -435,12 +519,15 @@ def main():
         logging.info("No new items to report")
         return
     
+    # Process with AI
     processed_items = process_with_groq_concurrent(new_items)
     
+    # Generate and send email
     start_date, end_date = get_date_range()
     html_content = generate_html_email(processed_items, start_date, end_date)
     send_email(html_content, start_date, end_date)
     
+    # Update archive
     for item in new_items:
         try:
             item['date'] = item['date'].strftime('%Y-%m-%d')
