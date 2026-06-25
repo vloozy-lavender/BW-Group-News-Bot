@@ -85,14 +85,14 @@ APIFY_API_TOKEN = os.getenv("APIFY_API_TOKEN")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 RESEND_API_KEY = os.getenv("RESEND_API_KEY")
 EMAIL_FROM = os.getenv("EMAIL_FROM", "news@yourdomain.com")
-EMAIL_TO = os.getenv("EMAIL_TO", "vernonlee37@gmail.com") # Keep your email for testing!
+EMAIL_TO = os.getenv("EMAIL_TO", "vernonlee37@gmail.com") 
 
 # Archive file path
 ARCHIVE_FILE = "archive.json"
 
-# SCRAPING LIMITS (To protect Apify free tier and LLM context)
-MAX_LINKEDIN_POSTS = 30  # Max posts per company on LinkedIn
-MAX_WEBSITE_ARTICLES = 15 # Max articles per source on websites
+# SCRAPING LIMITS
+MAX_LINKEDIN_POSTS = 30
+MAX_WEBSITE_ARTICLES = 15
 
 # =====================================================================
 # SECTION 2: DATE LOGIC (Weekly: Last 7 days)
@@ -134,7 +134,6 @@ def get_article_links(main_url):
         links = set()
         for a in soup.find_all('a', href=True):
             href = a['href']
-            # Ignore social links, emails, downloads, and embedded widgets
             if any(x in href.lower() for x in ['facebook', 'twitter', 'linkedin', 'mailto:', '#', '.pdf', '.jpg', '.png', 'tradingview', 'widget', 'iframe', 'youtube', 'javascript:', 'cookie']):
                 continue
             full_url = urljoin(main_url, href)
@@ -174,7 +173,6 @@ def extract_article_data(article_url, source_name=""):
         text = "\n".join([p.get_text(strip=True) for p in paragraphs if len(p.get_text(strip=True)) > 20])
         
         # --- RELEVANCE FILTER (Blocks sidebar ads on search pages) ---
-        # If it's a third-party search page, it MUST contain maritime/BW keywords
         if any(x in source_name.lower() for x in ['splash247', 'globenewswire', 'tradewinds', 'bloomberg', 'reuters', 'finansavisen', 'bunker']):
             combined_text = (title + " " + text).lower()
             if not any(kw in combined_text for kw in ['bw ', 'bw-', 'hafnia', 'cadeler', 'corvus', 'navigator', 'offshore', 'lng', 'lpg', 'shipping', 'maritime', 'vessel', 'tanker', 'sohmen-pao']):
@@ -194,12 +192,10 @@ def extract_article_data(article_url, source_name=""):
         return None
 
 def scrape_websites():
-    """Scrape all official company websites AND third-party industry sources."""
     start_date, end_date = get_date_range()
     logging.info(f"Scraping websites from {start_date} to {end_date}")
     collected_news = []
     
-    # Combine both dictionaries so the bot scrapes everything
     all_sources = {**COMPANIES_TO_TRACK, **THIRD_PARTY_SOURCES}
     
     for source_name, news_url in all_sources.items():
@@ -209,7 +205,7 @@ def scrape_websites():
         
         for link in links:
             if company_article_count >= MAX_WEBSITE_ARTICLES:
-                break # Stop scraping this source if we hit the limit
+                break
                 
             data = extract_article_data(link, source_name)
             if data and data['date'] and start_date <= data['date'] <= end_date:
@@ -231,7 +227,7 @@ def scrape_linkedin():
     client = ApifyClient(APIFY_API_TOKEN)
     run_input = {
         "targetUrls": LINKEDIN_COMPANIES,
-        "maxResults": MAX_LINKEDIN_POSTS, # Limit per company
+        "maxResults": MAX_LINKEDIN_POSTS,
         "includeQuotePosts": False,
         "includeReposts": False,
     }
@@ -248,13 +244,12 @@ def scrape_linkedin():
         
         if start_date <= post_date <= end_date:
             company_url = item.get('companyUrl', '')
-            # Clean up company name from URL
             company_name = company_url.split('/')[-2].replace('-', ' ').title() if company_url else "Unknown"
             
             collected_posts.append({
                 'url': item.get('url', ''),
                 'title': item.get('text', '')[:100] + "..." if len(item.get('text', '')) > 100 else item.get('text', ''),
-                'date': post_date, # Kept as date object
+                'date': post_date,
                 'text': item.get('text', '')[:500],
                 'company': company_name,
                 'source': 'linkedin'
@@ -269,7 +264,6 @@ def scrape_linkedin():
 # =====================================================================
 
 def process_single_item(item):
-    """Processes exactly ONE item with Groq to keep context tiny and output perfect."""
     prompt = f"""You are a corporate news analyst. Analyze this single update from {item['company']}.
 
 Text: {item['text']}
@@ -308,14 +302,12 @@ Return ONLY the JSON object. No markdown."""
         }
 
 def process_with_groq_concurrent(all_items):
-    """Uses ThreadPoolExecutor to process items concurrently but independently."""
     if not all_items:
         return []
     
     logging.info(f"Processing {len(all_items)} items with Groq concurrently...")
     processed_items = []
     
-    # Run up to 5 concurrent LLM calls at a time to be fast but avoid rate limits
     with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
         futures = {executor.submit(process_single_item, item): item for item in all_items}
         for future in concurrent.futures.as_completed(futures):
@@ -324,11 +316,10 @@ def process_with_groq_concurrent(all_items):
     return processed_items
 
 # =====================================================================
-# SECTION 7: HTML TABLE EMAIL GENERATION
+# SECTION 7: HTML TABLE EMAIL GENERATION & DELIVERY
 # =====================================================================
 
 def generate_html_email(processed_items, start_date, end_date):
-    # Group by Category
     grouped = defaultdict(list)
     for item in processed_items:
         cat = item.get('category', 'General News')
@@ -366,7 +357,6 @@ def generate_html_email(processed_items, start_date, end_date):
         html += f"<tr><th {th_style} style='width: 10%;'>Date</th><th {th_style} style='width: 15%;'>Company</th><th {th_style} style='width: 55%;'>Headline & Summary</th><th {th_style} style='width: 20%;'>Link</th></tr>"
         
         for item in items:
-            # Format date nicely (e.g., "Jun 24")
             raw_date = item.get('date', '')
             try:
                 date_obj = datetime.strptime(raw_date, '%Y-%m-%d')
@@ -404,6 +394,22 @@ def generate_html_email(processed_items, start_date, end_date):
     """
     return html
 
+def send_email(html_content, start_date, end_date):
+    resend.api_key = RESEND_API_KEY
+    subject = f"BW Group Weekly Digest: {len(html_content.split('<tr>'))-1} Updates ({start_date.strftime('%b %d')} - {end_date.strftime('%b %d')})"
+    
+    try:
+        params = {
+            "from": EMAIL_FROM,
+            "to": EMAIL_TO,
+            "subject": subject,
+            "html": html_content,
+        }
+        email = resend.Emails.send(params)
+        logging.info(f"Email sent successfully: {email}")
+    except Exception as e:
+        logging.error(f"Failed to send email: {e}")
+
 # =====================================================================
 # SECTION 8: MAIN EXECUTION
 # =====================================================================
@@ -429,15 +435,12 @@ def main():
         logging.info("No new items to report")
         return
     
-    # Process with Groq AI concurrently
     processed_items = process_with_groq_concurrent(new_items)
     
-    # Generate and send email
     start_date, end_date = get_date_range()
     html_content = generate_html_email(processed_items, start_date, end_date)
     send_email(html_content, start_date, end_date)
     
-    # Convert dates to text strings right before saving to JSON
     for item in new_items:
         try:
             item['date'] = item['date'].strftime('%Y-%m-%d')
