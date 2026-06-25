@@ -142,7 +142,7 @@ def extract_article_data(article_url):
                     pass
 
         # Extract title
-        title = soup.title.string.strip() if soup.title else "No Title"
+        title = soup.title.get_text(strip=True) if soup.title else "No Title"
         og_title = soup.find('meta', property='og:title')
         if og_title and og_title.get('content'):
             title = og_title['content'].strip()
@@ -209,7 +209,7 @@ def scrape_linkedin():
     
     # Fetch results
     collected_posts = []
-    for item in client.dataset(run["defaultDatasetId"]).iterate_items():
+    for item in client.dataset(run.default_dataset_id).iterate_items():
         # Parse the post date
         try:
             post_date = date_parser.parse(item.get('date', '')).date()
