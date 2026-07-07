@@ -35,68 +35,68 @@ COMPANY_SITES = {
     "BW Group": {
         "url": "https://bw-group.com/newsroom",
         "method": "cloudscraper",
-        "list_selector": ".news-item a",
-        "date_selector": ".news-item .date",
+        "list_selector": None,
+        "date_selector": None,
     },
     "BW Offshore": {
-        "url": "https://www.bwoffshore.com/investors/press-releases",
+        "url": "https://www.bwoffshore.com/news-media",  # FIXED URL
         "method": "cloudscraper",
-        "list_selector": ".press-release-item a",
-        "date_selector": ".press-release-item .date",
+        "list_selector": "a.news-item",  # Targets article links
+        "date_selector": None,  # No time tags found, falls back to generic
     },
     "BW LPG": {
         "url": "https://www.bwlpg.com/press-releases",
         "method": "cloudscraper",
-        "list_selector": ".press-release-item a",
-        "date_selector": ".press-release-item .date",
+        "list_selector": None,
+        "date_selector": None,
     },
     "BW Energy": {
         "url": "https://www.bwenergy.no/news-and-media?category=press-releases",
         "method": "cloudscraper",
-        "list_selector": ".post a",
-        "date_selector": ".post .date",
+        "list_selector": None,  # Generic scanning works
+        "date_selector": "time",  # Has <time> tags with datetime
     },
     "Hafnia": {
-        "url": "https://investor.hafnia.com/news-events/press-releases",
-        "method": "cloudscraper",
-        "list_selector": ".news-item a",
-        "date_selector": ".news-item .date",
+        "url": "https://investor.hafnia.com/ir-news/default.aspx",  # FIXED URL
+        "method": "playwright",  # JavaScript-rendered, needs Playwright
+        "list_selector": None,
+        "date_selector": None,
     },
     "Navigator Gas": {
         "url": "https://investors.navigatorgas.com/news-events/press-releases",
         "method": "cloudscraper",
-        "list_selector": ".news-item a",
-        "date_selector": ".news-item .date",
+        "list_selector": None,
+        "date_selector": None,
     },
     "Cadeler": {
-        "url": "https://ir.cadeler.com/news-events/press-releases",
+        "url": "https://ir.cadeler.com/press-releases",  # FIXED URL
         "method": "cloudscraper",
-        "list_selector": ".news-item a",
-        "date_selector": ".news-item .date",
+        "list_selector": "a[href*='/press-releases/detail/']",  # Targets article links
+        "date_selector": "time.date",  # Found <time class="date"> on articles
     },
     "BW Epic Kosan": {
         "url": "https://bwek.com/news",
         "method": "cloudscraper",
-        "list_selector": ".news-item a",
-        "date_selector": ".news-item .date",
+        "list_selector": None,
+        "date_selector": None,
     },
     "BW Ideol": {
         "url": "https://bw-ideol.com/category/financial-press-releases",
         "method": "cloudscraper",
-        "list_selector": "article .entry-title a",
-        "date_selector": "time.entry-date",
+        "list_selector": None,
+        "date_selector": None,
     },
     "BW ESS": {
         "url": "https://bw-ess.com/news",
         "method": "cloudscraper",
-        "list_selector": "article .entry-title a",
-        "date_selector": "time.entry-date",
+        "list_selector": None,
+        "date_selector": None,
     },
     "Corvus Energy": {
         "url": "https://corvusenergy.com/news",
         "method": "cloudscraper",
-        "list_selector": "article .entry-title a",
-        "date_selector": "time.entry-date",
+        "list_selector": None,
+        "date_selector": None,
     },
     "BW LNG": {
         "url": None,  # TODO: find URL
