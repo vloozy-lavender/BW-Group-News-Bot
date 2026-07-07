@@ -31,72 +31,89 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 RSS_FEEDS = {}
 
 # Unified Company Sites Configuration
+#
+# method:
+#   "cloudscraper" — static HTML, no browser needed
+#   "playwright"    — JS-rendered listing/content, needs a real browser
+#   "blocked"       — confirmed Cloudflare bot-challenge as of last
+#                     inspection (checked 3x: cloudscraper, Playwright
+#                     w/ networkidle, Playwright w/ domcontentloaded — all
+#                     hit the actual challenge page, not the site). This
+#                     is NOT a selector problem. Skipped cleanly at
+#                     runtime with a clear log line instead of quietly
+#                     returning 0 and looking broken.
 COMPANY_SITES = {
     "BW Group": {
         "url": "https://bw-group.com/newsroom",
         "method": "cloudscraper",
-        "list_selector": None,
-        "date_selector": None,
+        "list_selector": "section.o-entity__body a",
+        "date_selector": "time.o-entity__updated",
     },
     "BW Offshore": {
-        "url": "https://www.bwoffshore.com/news-media",  # FIXED URL
-        "method": "cloudscraper",
-        "list_selector": "a.news-item",  # Targets article links
-        "date_selector": None,  # No time tags found, falls back to generic
+        # NOTE: /news-media doesn't carry the actual release list; this
+        # (found via the site's own nav) does.
+        "url": "https://www.bwoffshore.com/all-press-releases",
+        "method": "playwright",  # Webflow CMS list, JS-rendered
+        "list_selector": "div.w-dyn-item a",
+        "date_selector": "div.text-block-433-copy",  # text only, e.g. "June 15, 2026"
     },
     "BW LPG": {
-        "url": "https://www.bwlpg.com/press-releases",
-        "method": "cloudscraper",
-        "list_selector": None,
-        "date_selector": None,
+        # NOTE: /press-releases 404s. Real listing is under /media/.
+        "url": "https://www.bwlpg.com/media/",
+        "method": "playwright",  # WordPress but list renders client-side
+        "list_selector": "div.article-container a",
+        "date_selector": "time.updated",  # has datetime="" attr
     },
     "BW Energy": {
         "url": "https://www.bwenergy.no/news-and-media?category=press-releases",
         "method": "cloudscraper",
-        "list_selector": None,  # Generic scanning works
-        "date_selector": "time",  # Has <time> tags with datetime
+        "list_selector": "div.releases-body a",
+        "date_selector": "time.updated",  # has datetime="" attr
     },
     "Hafnia": {
-    "url": "https://investor.hafnia.com/ir-news/default.aspx",
-    "method": "playwright",
-    "list_selector": "a[href*='/ir-news/']",  # Targets links to news articles
-    "date_selector": None,
+        "url": "https://investor.hafnia.com/news-events/press-releases",
+        "method": "blocked",
+        "list_selector": None,
+        "date_selector": None,
     },
     "Navigator Gas": {
         "url": "https://investors.navigatorgas.com/news-events/press-releases",
-        "method": "cloudscraper",
+        "method": "blocked",
         "list_selector": None,
         "date_selector": None,
     },
     "Cadeler": {
-        "url": "https://ir.cadeler.com/press-releases",  # FIXED URL
-        "method": "cloudscraper",
-        "list_selector": "a[href*='/press-releases/detail/']",  # Targets article links
-        "date_selector": "time.date",  # Found <time class="date"> on articles
+        "url": "https://ir.cadeler.com/press-releases",
+        "method": "playwright",  # cloudscraper 404s on this one, needs JS
+        "list_selector": "div.media-heading a",
+        "date_selector": "time.date",  # has datetime="" attr
     },
     "BW Epic Kosan": {
         "url": "https://bwek.com/news",
-        "method": "cloudscraper",
+        "method": "blocked",
         "list_selector": None,
         "date_selector": None,
     },
     "BW Ideol": {
-        "url": "https://bw-ideol.com/category/financial-press-releases",
-        "method": "cloudscraper",
-        "list_selector": None,
-        "date_selector": None,
+        # NOTE: /category/financial-press-releases 404s. Real listing here.
+        "url": "https://bw-ideol.com/en/latest-news",
+        "method": "playwright",  # cloudscraper only sees nav, needs JS
+        "list_selector": "div.ctnr a",
+        "date_selector": "time",  # has datetime="" attr
     },
     "BW ESS": {
         "url": "https://bw-ess.com/news",
         "method": "cloudscraper",
-        "list_selector": None,
-        "date_selector": None,
+        "list_selector": "h2 a",
+        "date_selector": "div.news-date",  # text only, e.g. "01.07.2026" (DD.MM.YYYY)
     },
     "Corvus Energy": {
         "url": "https://corvusenergy.com/news",
-        "method": "cloudscraper",
-        "list_selector": None,
-        "date_selector": None,
+        "method": "cloudscraper",  # listing works fine with cloudscraper
+        "list_selector": "div.ssr-variant.hidden-vpufh4.hidden-h2smca a",
+        "date_selector": None,  # article pages have NO date anywhere (checked
+        # text, datetime attrs, and JSON-LD) — date is pulled from the
+        # listing link's own text instead, see extract_listing_date_fallback()
     },
     "BW LNG": {
         "url": None,  # TODO: find URL
@@ -145,6 +162,37 @@ def get_date_range():
     start_date = today - timedelta(days=7)
     end_date = today
     return start_date, end_date
+
+
+def parse_date_dayfirst(raw):
+    """Wraps date_parser.parse with dayfirst=True.
+
+    Several sites (BW ESS: '01.07.2026', BW Ideol: '24/03/2026') use the
+    European day-first numeric convention. dateutil does NOT assume this
+    by default and will silently read '01.07.2026' as Jan 7 instead of
+    Jul 1 without the flag — this was a real bug caught in testing.
+    Month-name and ISO formats are unambiguous either way, so this is
+    safe to apply everywhere.
+    """
+    if not raw:
+        return None
+    try:
+        return date_parser.parse(raw, dayfirst=True).date()
+    except (ValueError, OverflowError):
+        return None
+
+
+def extract_listing_date_fallback(anchor_text):
+    """Corvus Energy's article pages have no date anywhere (checked text,
+    datetime attrs, and JSON-LD) — but the listing page's own link text
+    embeds it, e.g. 'April 30, 2026Press ReleaseCorvus Energy Achieves...'.
+    Used as a last-resort fallback when normal date extraction fails."""
+    if not anchor_text:
+        return None
+    match = re.match(r"^([A-Z][a-z]+ \d{1,2},\s*\d{4})", anchor_text.strip())
+    if match:
+        return parse_date_dayfirst(match.group(1))
+    return None
 
 # =====================================================================
 # SECTION 3: ARCHIVE MANAGEMENT (Deduplication)
@@ -232,19 +280,30 @@ def scrape_with_cloudscraper():
             resp = scraper.get(news_url, timeout=15)
             soup = BeautifulSoup(resp.text, 'html.parser')
             
+            # Capture (href, anchor_text) pairs, not just href — anchor
+            # text is needed as a date fallback for sites like Corvus
+            # Energy where the article page itself has no date at all.
             if list_selector:
-                links = [a['href'] for a in soup.select(list_selector) if a.get('href')]
+                link_pairs = [(a['href'], a.get_text(strip=True)) for a in soup.select(list_selector) if a.get('href')]
             else:
-                links = []
+                link_pairs = []
                 for a in soup.find_all('a', href=True):
                     href = a['href']
                     if any(x in href.lower() for x in ['facebook', 'twitter', 'linkedin', 'mailto:', '#', '.pdf', '.jpg', 'tradingview', 'widget']):
                         continue
                     full_url = urljoin(news_url, href)
                     if len(href.split('/')) > 2:
-                        links.append(full_url)
+                        link_pairs.append((full_url, a.get_text(strip=True)))
             
-            for href in links:
+            # Cap per-site fetches to keep runtime sane, but don't stop
+            # after the first match — a `break` here previously meant
+            # each site could contribute at most 1 article per run,
+            # regardless of how many were actually published that week.
+            found_this_site = 0
+            MAX_PER_SITE = 20
+            for href, anchor_text in link_pairs:
+                if found_this_site >= MAX_PER_SITE:
+                    break
                 full_url = href if href.startswith('http') else urljoin(news_url, href)
                 try:
                     article_resp = scraper.get(full_url, timeout=15)
@@ -256,20 +315,22 @@ def scrape_with_cloudscraper():
                         if date_el:
                             dt = date_el.get('datetime') or date_el.get_text(strip=True)
                             if dt:
-                                try: pub_date = date_parser.parse(dt).date()
-                                except: pass
+                                pub_date = parse_date_dayfirst(dt)
                     
                     if not pub_date:
                         meta_date = article_soup.find('meta', property='article:published_time')
                         if meta_date and meta_date.get('content'):
-                            try: pub_date = date_parser.parse(meta_date['content']).date()
-                            except: pass
+                            pub_date = parse_date_dayfirst(meta_date['content'])
                     
                     if not pub_date:
                         time_tag = article_soup.find('time')
                         if time_tag and time_tag.get('datetime'):
-                            try: pub_date = date_parser.parse(time_tag['datetime']).date()
-                            except: pass
+                            pub_date = parse_date_dayfirst(time_tag['datetime'])
+
+                    if not pub_date:
+                        # Last resort: date embedded in the listing link's
+                        # own text (Corvus Energy pattern).
+                        pub_date = extract_listing_date_fallback(anchor_text)
                     
                     if pub_date and start_date <= pub_date <= end_date:
                         title = article_soup.title.get_text(strip=True) if article_soup.title else "No Title"
@@ -287,7 +348,7 @@ def scrape_with_cloudscraper():
                             'source': 'cloudscraper'
                         })
                         logging.info(f"  Found via cloudscraper: {title}")
-                        break
+                        found_this_site += 1
                 except:
                     continue
         except Exception as e:
@@ -324,25 +385,31 @@ def scrape_with_playwright():
             logging.info(f"Scanning {company_name} with Playwright...")
             try:
                 page.goto(news_url, wait_until='domcontentloaded', timeout=60000)
+                page.wait_for_timeout(4000)  # let client-side rendering settle
                 html = page.content()
                 soup = BeautifulSoup(html, 'html.parser')
                 
                 if list_selector:
-                    links = [a['href'] for a in soup.select(list_selector) if a.get('href')]
+                    link_pairs = [(a['href'], a.get_text(strip=True)) for a in soup.select(list_selector) if a.get('href')]
                 else:
-                    links = []
+                    link_pairs = []
                     for a in soup.find_all('a', href=True):
                         href = a['href']
                         if any(x in href.lower() for x in ['facebook', 'twitter', 'linkedin', 'mailto:', '#', '.pdf', '.jpg']):
                             continue
                         full_url = urljoin(news_url, href)
                         if len(href.split('/')) > 2:
-                            links.append(full_url)
+                            link_pairs.append((full_url, a.get_text(strip=True)))
                 
-                for href in links:
+                found_this_site = 0
+                MAX_PER_SITE = 20
+                for href, anchor_text in link_pairs:
+                    if found_this_site >= MAX_PER_SITE:
+                        break
                     full_url = href if href.startswith('http') else urljoin(news_url, href)
                     try:
-                        page.goto(full_url, wait_until='networkidle', timeout=30000)
+                        page.goto(full_url, wait_until='domcontentloaded', timeout=30000)
+                        page.wait_for_timeout(2000)
                         article_html = page.content()
                         article_soup = BeautifulSoup(article_html, 'html.parser')
                         
@@ -352,20 +419,20 @@ def scrape_with_playwright():
                             if date_el:
                                 dt = date_el.get('datetime') or date_el.get_text(strip=True)
                                 if dt:
-                                    try: pub_date = date_parser.parse(dt).date()
-                                    except: pass
+                                    pub_date = parse_date_dayfirst(dt)
                         
                         if not pub_date:
                             meta_date = article_soup.find('meta', property='article:published_time')
                             if meta_date and meta_date.get('content'):
-                                try: pub_date = date_parser.parse(meta_date['content']).date()
-                                except: pass
+                                pub_date = parse_date_dayfirst(meta_date['content'])
                         
                         if not pub_date:
                             time_tag = article_soup.find('time')
                             if time_tag and time_tag.get('datetime'):
-                                try: pub_date = date_parser.parse(time_tag['datetime']).date()
-                                except: pass
+                                pub_date = parse_date_dayfirst(time_tag['datetime'])
+
+                        if not pub_date:
+                            pub_date = extract_listing_date_fallback(anchor_text)
                         
                         if pub_date and start_date <= pub_date <= end_date:
                             title = article_soup.title.get_text(strip=True) if article_soup.title else "No Title"
@@ -383,7 +450,7 @@ def scrape_with_playwright():
                                 'source': 'playwright'
                             })
                             logging.info(f"  Found via Playwright: {title}")
-                            break
+                            found_this_site += 1
                     except:
                         continue
             except Exception as e:
@@ -568,6 +635,13 @@ def send_email(html_content, start_date, end_date):
 def main():
     logging.info("Starting BW Group Weekly News Bot (Hybrid Mode)...")
     
+    blocked = {k: v for k, v in COMPANY_SITES.items() if v['method'] == 'blocked'}
+    if blocked:
+        logging.warning(
+            f"Skipping {len(blocked)} site(s) blocked by Cloudflare bot-protection "
+            f"(confirmed, not a selector issue): {', '.join(blocked)}"
+        )
+
     archive = load_archive()
     logging.info(f"Archive contains {len(archive)} previously sent items")
     
