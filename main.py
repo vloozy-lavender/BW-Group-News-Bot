@@ -323,7 +323,7 @@ def scrape_with_playwright():
             
             logging.info(f"Scanning {company_name} with Playwright...")
             try:
-                page.goto(news_url, wait_until='networkidle', timeout=30000)
+                page.goto(news_url, wait_until='domcontentloaded', timeout=60000)
                 html = page.content()
                 soup = BeautifulSoup(html, 'html.parser')
                 
