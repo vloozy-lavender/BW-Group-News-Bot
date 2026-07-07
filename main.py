@@ -57,10 +57,10 @@ COMPANY_SITES = {
         "date_selector": "time",  # Has <time> tags with datetime
     },
     "Hafnia": {
-        "url": "https://investor.hafnia.com/ir-news/default.aspx",  # FIXED URL
-        "method": "playwright",  # JavaScript-rendered, needs Playwright
-        "list_selector": None,
-        "date_selector": None,
+    "url": "https://investor.hafnia.com/ir-news/default.aspx",
+    "method": "playwright",
+    "list_selector": "a[href*='/ir-news/']",  # Targets links to news articles
+    "date_selector": None,
     },
     "Navigator Gas": {
         "url": "https://investors.navigatorgas.com/news-events/press-releases",
