@@ -1,6 +1,7 @@
 import os
 import json
 import logging
+import time
 import requests
 import concurrent.futures
 import re
@@ -9,7 +10,6 @@ from datetime import datetime, timedelta
 from dateutil import parser as date_parser
 from urllib.parse import urljoin
 from groq import Groq
-from apify_client import ApifyClient
 import resend
 from collections import defaultdict
 import urllib3
@@ -17,7 +17,7 @@ import cloudscraper
 import feedparser
 from playwright.sync_api import sync_playwright
 
-# Disable SSL warnings
+# Disable SSL warnings for problematic corporate sites
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # Configure logging
@@ -27,61 +27,117 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 # SECTION 1: CONFIGURATION & LIMITS
 # =====================================================================
 
-# RSS Feeds - NONE FOUND (all companies lack RSS feeds)
+# RSS Feeds
 RSS_FEEDS = {}
 
-# Sites to scrape with cloudscraper (bypasses basic Cloudflare)
-# These are faster and work on 80% of corporate sites
-CLOUDSCRAPER_SITES = {
-    "BW Group": "https://bw-group.com/newsroom",
-    "BW Offshore": "https://www.bwoffshore.com/investors/press-releases",
-    "BW LPG": "https://www.bwlpg.com/press-releases",
-    "BW Energy": "https://www.bwenergy.no/news-and-media?category=press-releases",
-    "Hafnia": "https://investor.hafnia.com/news-events/press-releases",
-    "Navigator Gas": "https://investors.navigatorgas.com/news-events/press-releases",
-    "Cadeler": "https://ir.cadeler.com/news-events/press-releases",
-    "BW Epic Kosan": "https://bwek.com/news",
-    "BW Ideol": "https://bw-ideol.com/category/financial-press-releases",
-    "BW ESS": "https://bw-ess.com/news",
-    "Corvus Energy": "https://corvusenergy.com/news",
+# Unified Company Sites Configuration
+COMPANY_SITES = {
+    "BW Group": {
+        "url": "https://bw-group.com/newsroom",
+        "method": "cloudscraper",
+        "list_selector": None,
+        "date_selector": None,
+    },
+    "BW Offshore": {
+        "url": "https://www.bwoffshore.com/investors/press-releases",
+        "method": "cloudscraper",
+        "list_selector": None,
+        "date_selector": None,
+    },
+    "BW LPG": {
+        "url": "https://www.bwlpg.com/press-releases",
+        "method": "cloudscraper",
+        "list_selector": None,
+        "date_selector": None,
+    },
+    "BW Energy": {
+        "url": "https://www.bwenergy.no/news-and-media?category=press-releases",
+        "method": "cloudscraper",
+        "list_selector": None,
+        "date_selector": None,
+    },
+    "Hafnia": {
+        "url": "https://investor.hafnia.com/news-events/press-releases",
+        "method": "cloudscraper",
+        "list_selector": None,
+        "date_selector": None,
+    },
+    "Navigator Gas": {
+        "url": "https://investors.navigatorgas.com/news-events/press-releases",
+        "method": "cloudscraper",
+        "list_selector": None,
+        "date_selector": None,
+    },
+    "Cadeler": {
+        "url": "https://ir.cadeler.com/news-events/press-releases",
+        "method": "cloudscraper",
+        "list_selector": None,
+        "date_selector": None,
+    },
+    "BW Epic Kosan": {
+        "url": "https://bwek.com/news",
+        "method": "cloudscraper",
+        "list_selector": None,
+        "date_selector": None,
+    },
+    "BW Ideol": {
+        "url": "https://bw-ideol.com/category/financial-press-releases",
+        "method": "cloudscraper",
+        "list_selector": None,
+        "date_selector": None,
+    },
+    "BW ESS": {
+        "url": "https://bw-ess.com/news",
+        "method": "cloudscraper",
+        "list_selector": None,
+        "date_selector": None,
+    },
+    "Corvus Energy": {
+        "url": "https://corvusenergy.com/news",
+        "method": "cloudscraper",
+        "list_selector": None,
+        "date_selector": None,
+    },
+    "BW LNG": {
+        "url": None,  # TODO: find URL
+        "method": "cloudscraper",
+        "list_selector": None,
+        "date_selector": None,
+    },
+    "BW Dry Cargo": {
+        "url": None,  # TODO: find URL
+        "method": "cloudscraper",
+        "list_selector": None,
+        "date_selector": None,
+    },
+    "BW Water": {
+        "url": None,  # TODO: find URL
+        "method": "cloudscraper",
+        "list_selector": None,
+        "date_selector": None,
+    },
+    "BW Digital": {
+        "url": None,  # TODO: find URL
+        "method": "cloudscraper",
+        "list_selector": None,
+        "date_selector": None,
+    },
 }
 
-# Sites that need Playwright (heavy JavaScript - last resort)
-# Leave this empty for now. If cloudscraper fails on any site above,
-# we'll move it here after testing.
-PLAYWRIGHT_SITES = {}
-
-# LinkedIn company pages (via Apify - already working)
-LINKEDIN_COMPANIES = [
-    "https://www.linkedin.com/company/bw-group/",
-    "https://www.linkedin.com/company/bw-offshore/",
-    "https://www.linkedin.com/company/bw-lpg/",
-    "https://www.linkedin.com/company/bw-lng/",
-    "https://www.linkedin.com/company/hafnia/",
-    "https://www.linkedin.com/company/bw-energy/",
-    "https://www.linkedin.com/company/navigator-gas/",
-    "https://www.linkedin.com/company/cadeler/",
-    "https://www.linkedin.com/company/bw-dry-cargo/",
-    "https://www.linkedin.com/company/bw-epic-kosan/",
-    "https://www.linkedin.com/company/bw-water/",
-    "https://www.linkedin.com/company/bw-ideol/",
-    "https://www.linkedin.com/company/bw-digital/",
-    "https://www.linkedin.com/company/bw-ess/",
-    "https://www.linkedin.com/company/corvus-energy/",
-]
-
 # API Keys
-APIFY_API_TOKEN = os.getenv("APIFY_API_TOKEN")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 RESEND_API_KEY = os.getenv("RESEND_API_KEY")
 EMAIL_FROM = os.getenv("EMAIL_FROM", "news@yourdomain.com")
 EMAIL_TO = os.getenv("EMAIL_TO", "vernonlee37@gmail.com")
 
 ARCHIVE_FILE = "archive.json"
-MAX_LINKEDIN_POSTS = 30
+
+# Groq Rate Limit Controls
+GROQ_MAX_CONCURRENT = 5
+GROQ_BATCH_SIZE = 10
 
 # =====================================================================
-# SECTION 2: DATE LOGIC
+# SECTION 2: DATE LOGIC (Weekly: Last 7 days)
 # =====================================================================
 
 def get_date_range():
@@ -91,7 +147,7 @@ def get_date_range():
     return start_date, end_date
 
 # =====================================================================
-# SECTION 3: ARCHIVE MANAGEMENT
+# SECTION 3: ARCHIVE MANAGEMENT (Deduplication)
 # =====================================================================
 
 def load_archive():
@@ -125,7 +181,6 @@ def scrape_rss_feeds():
         try:
             feed = feedparser.parse(rss_url)
             for entry in feed.entries:
-                # Extract date
                 pub_date = None
                 if hasattr(entry, 'published_parsed') and entry.published_parsed:
                     pub_date = datetime(*entry.published_parsed[:6]).date()
@@ -164,31 +219,147 @@ def scrape_with_cloudscraper():
     
     scraper = cloudscraper.create_scraper()
     
-    for company_name, news_url in CLOUDSCRAPER_SITES.items():
+    for company_name, config in COMPANY_SITES.items():
+        if config['method'] != 'cloudscraper' or not config['url']:
+            continue
+            
+        news_url = config['url']
+        list_selector = config['list_selector']
+        date_selector = config['date_selector']
+        
         logging.info(f"Scanning {company_name} with cloudscraper...")
         try:
             resp = scraper.get(news_url, timeout=15)
             soup = BeautifulSoup(resp.text, 'html.parser')
             
-            # Find article links
-            for a in soup.find_all('a', href=True):
-                href = a['href']
-                if any(x in href.lower() for x in ['facebook', 'twitter', 'linkedin', 'mailto:', '#', '.pdf', '.jpg', 'tradingview', 'widget']):
-                    continue
-                
-                full_url = urljoin(news_url, href)
-                if len(href.split('/')) > 2:
-                    # Visit the article page
-                    try:
-                        article_resp = scraper.get(full_url, timeout=15)
-                        article_soup = BeautifulSoup(article_resp.text, 'html.parser')
-                        
-                        # Extract date
-                        pub_date = None
+            if list_selector:
+                links = [a['href'] for a in soup.select(list_selector) if a.get('href')]
+            else:
+                links = []
+                for a in soup.find_all('a', href=True):
+                    href = a['href']
+                    if any(x in href.lower() for x in ['facebook', 'twitter', 'linkedin', 'mailto:', '#', '.pdf', '.jpg', 'tradingview', 'widget']):
+                        continue
+                    full_url = urljoin(news_url, href)
+                    if len(href.split('/')) > 2:
+                        links.append(full_url)
+            
+            for href in links:
+                full_url = href if href.startswith('http') else urljoin(news_url, href)
+                try:
+                    article_resp = scraper.get(full_url, timeout=15)
+                    article_soup = BeautifulSoup(article_resp.text, 'html.parser')
+                    
+                    pub_date = None
+                    if date_selector:
+                        date_el = article_soup.select_one(date_selector)
+                        if date_el:
+                            dt = date_el.get('datetime') or date_el.get_text(strip=True)
+                            if dt:
+                                try: pub_date = date_parser.parse(dt).date()
+                                except: pass
+                    
+                    if not pub_date:
                         meta_date = article_soup.find('meta', property='article:published_time')
                         if meta_date and meta_date.get('content'):
                             try: pub_date = date_parser.parse(meta_date['content']).date()
                             except: pass
+                    
+                    if not pub_date:
+                        time_tag = article_soup.find('time')
+                        if time_tag and time_tag.get('datetime'):
+                            try: pub_date = date_parser.parse(time_tag['datetime']).date()
+                            except: pass
+                    
+                    if pub_date and start_date <= pub_date <= end_date:
+                        title = article_soup.title.get_text(strip=True) if article_soup.title else "No Title"
+                        for element in article_soup(["script", "style", "nav", "header", "footer"]):
+                            element.extract()
+                        paragraphs = article_soup.find_all('p')
+                        text = "\n".join([p.get_text(strip=True) for p in paragraphs if len(p.get_text(strip=True)) > 20])
+                        
+                        collected_news.append({
+                            'url': full_url,
+                            'title': title,
+                            'date': pub_date,
+                            'text': text[:500],
+                            'company': company_name,
+                            'source': 'cloudscraper'
+                        })
+                        logging.info(f"  Found via cloudscraper: {title}")
+                        break
+                except:
+                    continue
+        except Exception as e:
+            logging.error(f"Cloudscraper failed for {company_name}: {e}")
+    
+    logging.info(f"Found {len(collected_news)} articles via cloudscraper")
+    return collected_news
+
+# =====================================================================
+# SECTION 6: TIER 3 - PLAYWRIGHT (Heavy JavaScript sites)
+# =====================================================================
+
+def scrape_with_playwright():
+    """Use Playwright for sites with heavy JavaScript."""
+    start_date, end_date = get_date_range()
+    logging.info(f"Scraping with Playwright from {start_date} to {end_date}")
+    collected_news = []
+    
+    playwright_sites = {k: v for k, v in COMPANY_SITES.items() if v['method'] == 'playwright' and v['url']}
+    
+    if not playwright_sites:
+        logging.info("No Playwright sites configured")
+        return collected_news
+    
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        
+        for company_name, config in playwright_sites.items():
+            news_url = config['url']
+            list_selector = config['list_selector']
+            date_selector = config['date_selector']
+            
+            logging.info(f"Scanning {company_name} with Playwright...")
+            try:
+                page.goto(news_url, wait_until='networkidle', timeout=30000)
+                html = page.content()
+                soup = BeautifulSoup(html, 'html.parser')
+                
+                if list_selector:
+                    links = [a['href'] for a in soup.select(list_selector) if a.get('href')]
+                else:
+                    links = []
+                    for a in soup.find_all('a', href=True):
+                        href = a['href']
+                        if any(x in href.lower() for x in ['facebook', 'twitter', 'linkedin', 'mailto:', '#', '.pdf', '.jpg']):
+                            continue
+                        full_url = urljoin(news_url, href)
+                        if len(href.split('/')) > 2:
+                            links.append(full_url)
+                
+                for href in links:
+                    full_url = href if href.startswith('http') else urljoin(news_url, href)
+                    try:
+                        page.goto(full_url, wait_until='networkidle', timeout=30000)
+                        article_html = page.content()
+                        article_soup = BeautifulSoup(article_html, 'html.parser')
+                        
+                        pub_date = None
+                        if date_selector:
+                            date_el = article_soup.select_one(date_selector)
+                            if date_el:
+                                dt = date_el.get('datetime') or date_el.get_text(strip=True)
+                                if dt:
+                                    try: pub_date = date_parser.parse(dt).date()
+                                    except: pass
+                        
+                        if not pub_date:
+                            meta_date = article_soup.find('meta', property='article:published_time')
+                            if meta_date and meta_date.get('content'):
+                                try: pub_date = date_parser.parse(meta_date['content']).date()
+                                except: pass
                         
                         if not pub_date:
                             time_tag = article_soup.find('time')
@@ -209,81 +380,12 @@ def scrape_with_cloudscraper():
                                 'date': pub_date,
                                 'text': text[:500],
                                 'company': company_name,
-                                'source': 'cloudscraper'
+                                'source': 'playwright'
                             })
-                            logging.info(f"  Found via cloudscraper: {title}")
-                            break  # Only get first article per link to avoid duplicates
+                            logging.info(f"  Found via Playwright: {title}")
+                            break
                     except:
                         continue
-        except Exception as e:
-            logging.error(f"Cloudscraper failed for {company_name}: {e}")
-    
-    logging.info(f"Found {len(collected_news)} articles via cloudscraper")
-    return collected_news
-
-# =====================================================================
-# SECTION 6: TIER 3 - PLAYWRIGHT (Heavy JavaScript sites)
-# =====================================================================
-
-def scrape_with_playwright():
-    """Use Playwright for sites with heavy JavaScript."""
-    start_date, end_date = get_date_range()
-    logging.info(f"Scraping with Playwright from {start_date} to {end_date}")
-    collected_news = []
-    
-    if not PLAYWRIGHT_SITES:
-        logging.info("No Playwright sites configured")
-        return collected_news
-    
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        page = browser.new_page()
-        
-        for company_name, news_url in PLAYWRIGHT_SITES.items():
-            logging.info(f"Scanning {company_name} with Playwright...")
-            try:
-                page.goto(news_url, wait_until='networkidle', timeout=30000)
-                html = page.content()
-                soup = BeautifulSoup(html, 'html.parser')
-                
-                # Find article links and extract data (similar to cloudscraper)
-                for a in soup.find_all('a', href=True):
-                    href = a['href']
-                    if any(x in href.lower() for x in ['facebook', 'twitter', 'linkedin', 'mailto:', '#', '.pdf', '.jpg']):
-                        continue
-                    
-                    full_url = urljoin(news_url, href)
-                    if len(href.split('/')) > 2:
-                        try:
-                            page.goto(full_url, wait_until='networkidle', timeout=30000)
-                            article_html = page.content()
-                            article_soup = BeautifulSoup(article_html, 'html.parser')
-                            
-                            pub_date = None
-                            meta_date = article_soup.find('meta', property='article:published_time')
-                            if meta_date and meta_date.get('content'):
-                                try: pub_date = date_parser.parse(meta_date['content']).date()
-                                except: pass
-                            
-                            if pub_date and start_date <= pub_date <= end_date:
-                                title = article_soup.title.get_text(strip=True) if article_soup.title else "No Title"
-                                for element in article_soup(["script", "style", "nav", "header", "footer"]):
-                                    element.extract()
-                                paragraphs = article_soup.find_all('p')
-                                text = "\n".join([p.get_text(strip=True) for p in paragraphs if len(p.get_text(strip=True)) > 20])
-                                
-                                collected_news.append({
-                                    'url': full_url,
-                                    'title': title,
-                                    'date': pub_date,
-                                    'text': text[:500],
-                                    'company': company_name,
-                                    'source': 'playwright'
-                                })
-                                logging.info(f"  Found via Playwright: {title}")
-                                break
-                        except:
-                            continue
             except Exception as e:
                 logging.error(f"Playwright failed for {company_name}: {e}")
         
@@ -293,50 +395,7 @@ def scrape_with_playwright():
     return collected_news
 
 # =====================================================================
-# SECTION 7: LINKEDIN SCRAPING VIA APIFY
-# =====================================================================
-
-def scrape_linkedin():
-    start_date, end_date = get_date_range()
-    logging.info(f"Scraping LinkedIn from {start_date} to {end_date}")
-    
-    client = ApifyClient(APIFY_API_TOKEN)
-    run_input = {
-        "targetUrls": LINKEDIN_COMPANIES,
-        "maxResults": MAX_LINKEDIN_POSTS,
-        "includeQuotePosts": False,
-        "includeReposts": False,
-    }
-    
-    logging.info("Starting Apify LinkedIn scraper...")
-    run = client.actor("harvestapi/linkedin-company-posts").call(run_input=run_input)
-    
-    collected_posts = []
-    for item in client.dataset(run.default_dataset_id).iterate_items():
-        try:
-            post_date = date_parser.parse(item.get('date', '')).date()
-        except:
-            continue
-        
-        if start_date <= post_date <= end_date:
-            company_url = item.get('companyUrl', '')
-            company_name = company_url.split('/')[-2].replace('-', ' ').title() if company_url else "Unknown"
-            
-            collected_posts.append({
-                'url': item.get('url', ''),
-                'title': item.get('text', '')[:100] + "..." if len(item.get('text', '')) > 100 else item.get('text', ''),
-                'date': post_date,
-                'text': item.get('text', '')[:500],
-                'company': company_name,
-                'source': 'linkedin'
-            })
-            logging.info(f"  Found LinkedIn post: {item.get('text', '')[:50]}")
-    
-    logging.info(f"Found {len(collected_posts)} LinkedIn posts in date range")
-    return collected_posts
-
-# =====================================================================
-# SECTION 8: AI PROCESSING (CONCURRENT BATCHING)
+# SECTION 7: AI PROCESSING (CONCURRENT BATCHING WITH RATE LIMITS)
 # =====================================================================
 
 def process_single_item(item):
@@ -353,29 +412,38 @@ Return a JSON object with exactly these fields:
 Return ONLY the JSON object. No markdown."""
 
     client = Groq(api_key=GROQ_API_KEY)
-    try:
-        completion = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.1,
-            max_tokens=300,
-            response_format={"type": "json_object"}
-        )
-        parsed = json.loads(completion.choices[0].message.content)
-        parsed['url'] = item['url']
-        parsed['company'] = item['company']
-        parsed['date'] = str(item['date'])
-        return parsed
-    except Exception as e:
-        logging.error(f"Groq failed for {item['url']}: {e}")
-        return {
-            'headline': item['title'],
-            'summary': 'Summary unavailable.',
-            'category': 'General News',
-            'url': item['url'],
-            'company': item['company'],
-            'date': str(item['date'])
-        }
+    
+    for attempt in range(3):
+        try:
+            completion = client.chat.completions.create(
+                model="llama-3.3-70b-versatile",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.1,
+                max_tokens=300,
+                response_format={"type": "json_object"}
+            )
+            parsed = json.loads(completion.choices[0].message.content)
+            parsed['url'] = item['url']
+            parsed['company'] = item['company']
+            parsed['date'] = str(item['date'])
+            return parsed
+        except Exception as e:
+            err_str = str(e).lower()
+            if '429' in err_str or 'rate_limit' in err_str:
+                logging.warning(f"Groq rate limit hit for {item['url']}. Retrying in 5s... (Attempt {attempt + 1}/3)")
+                time.sleep(5)
+            else:
+                logging.error(f"Groq failed for {item['url']}: {e}")
+                break
+                
+    return {
+        'headline': item['title'],
+        'summary': 'Summary unavailable.',
+        'category': 'General News',
+        'url': item['url'],
+        'company': item['company'],
+        'date': str(item['date'])
+    }
 
 def process_with_groq_concurrent(all_items):
     if not all_items:
@@ -384,15 +452,25 @@ def process_with_groq_concurrent(all_items):
     logging.info(f"Processing {len(all_items)} items with Groq concurrently...")
     processed_items = []
     
-    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
-        futures = {executor.submit(process_single_item, item): item for item in all_items}
-        for future in concurrent.futures.as_completed(futures):
-            processed_items.append(future.result())
+    total_chunks = (len(all_items) + GROQ_BATCH_SIZE - 1) // GROQ_BATCH_SIZE
+    
+    for i in range(0, len(all_items), GROQ_BATCH_SIZE):
+        chunk = all_items[i:i+GROQ_BATCH_SIZE]
+        chunk_num = i // GROQ_BATCH_SIZE + 1
+        logging.info(f"Processing chunk {chunk_num}/{total_chunks} ({len(chunk)} items)...")
+        
+        with concurrent.futures.ThreadPoolExecutor(max_workers=GROQ_MAX_CONCURRENT) as executor:
+            futures = {executor.submit(process_single_item, item): item for item in chunk}
+            for future in concurrent.futures.as_completed(futures):
+                processed_items.append(future.result())
+                
+        if i + GROQ_BATCH_SIZE < len(all_items):
+            time.sleep(2)
             
     return processed_items
 
 # =====================================================================
-# SECTION 9: HTML TABLE EMAIL GENERATION & DELIVERY
+# SECTION 8: HTML TABLE EMAIL GENERATION & DELIVERY
 # =====================================================================
 
 def generate_html_email(processed_items, start_date, end_date):
@@ -484,7 +562,7 @@ def send_email(html_content, start_date, end_date):
         logging.error(f"Failed to send email: {e}")
 
 # =====================================================================
-# SECTION 10: MAIN EXECUTION
+# SECTION 9: MAIN EXECUTION
 # =====================================================================
 
 def main():
@@ -493,22 +571,12 @@ def main():
     archive = load_archive()
     logging.info(f"Archive contains {len(archive)} previously sent items")
     
-    # TIER 1: RSS Feeds (Fastest)
     rss_news = scrape_rss_feeds()
-    
-    # TIER 2: Cloudscraper (Bypasses basic security)
     cloudscraper_news = scrape_with_cloudscraper()
-    
-    # TIER 3: Playwright (Heavy JS sites)
     playwright_news = scrape_with_playwright()
     
-    # LinkedIn (via Apify)
-    linkedin_posts = scrape_linkedin()
+    all_items = rss_news + cloudscraper_news + playwright_news
     
-    # Combine all sources
-    all_items = rss_news + cloudscraper_news + playwright_news + linkedin_posts
-    
-    # Deduplicate
     new_items = [item for item in all_items if is_new_item(item['url'], archive)]
     logging.info(f"After deduplication: {len(new_items)} new items")
     
@@ -516,15 +584,12 @@ def main():
         logging.info("No new items to report")
         return
     
-    # Process with AI
     processed_items = process_with_groq_concurrent(new_items)
     
-    # Generate and send email
     start_date, end_date = get_date_range()
     html_content = generate_html_email(processed_items, start_date, end_date)
     send_email(html_content, start_date, end_date)
     
-    # Update archive
     for item in new_items:
         try:
             item['date'] = item['date'].strftime('%Y-%m-%d')
