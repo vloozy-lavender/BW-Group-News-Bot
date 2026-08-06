@@ -15,7 +15,10 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 RESEND_API_KEY = os.getenv("RESEND_API_KEY")
 EMAIL_FROM = os.getenv("EMAIL_FROM", "news@yourdomain.com")
-EMAIL_TO = os.getenv("EMAIL_TO", "vernonlee37@gmail.com")
+
+# Support multiple emails separated by commas
+raw_email_to = os.getenv("EMAIL_TO", "vernonlee37@gmail.com")
+EMAIL_TO = [email.strip() for email in raw_email_to.split(",")]
 
 # GitHub repo info (to fetch archive.json)
 GITHUB_REPO = "vloozy-lavender/BW-Group-News-Bot"
