@@ -94,5 +94,13 @@
     "text": "Some of the data collected by this provider is for the purposes of personalization and measuring advertising effectiveness. The provider may use the IP Addresses for ads measurement and ads personalization.\nWe do not use cookies of this type.\nSome of the data collected by this provider is for the purposes of personalization and measuring advertising effectiveness. The provider may use the IP Addresses for ads measurement and ads personalization.\nAs we at BW LPG want you to have as smooth a websi",
     "company": "BW LPG",
     "source": "playwright"
+  },
+  {
+    "url": "https://bw-ess.com/news/bw-ess-acquires-250mw-1000mwh-yanco-bess-from-acenergy",
+    "title": "BW ESS acquires 250MW / 1000MWh Yanco BESS from ACEnergy",
+    "date": "2026-08-13",
+    "text": "New South Wales, Australia, 13 August 2026 \u2013Global energy storage owner-operator, BW ESS, has acquired the Yanco Battery Energy Storage System (Yanco BESS) from leading Australian renewable energy developer ACEnergy. BW ESS will now move the 250MW / 1,000MWh project in Riverina, New South Wales through construction and into long-term operations.\nYanco BESS will connect to the Yanco 132kV substation and will provide firming capacity, energy arbitrage and system security services to the National E",
+    "company": "BW ESS",
+    "source": "cloudscraper"
   }
 ]
