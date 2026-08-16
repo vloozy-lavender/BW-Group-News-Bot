@@ -115,30 +115,26 @@ COMPANY_SITES = {
         # text, datetime attrs, and JSON-LD) — date is pulled from the
         # listing link's own text instead, see extract_listing_date_fallback()
     },
-    "BW LNG": {
-        "url": None,  # TODO: find URL
-        "method": "cloudscraper",
-        "list_selector": None,
-        "date_selector": None,
-    },
-    "BW Dry Cargo": {
-        "url": None,  # TODO: find URL
-        "method": "cloudscraper",
-        "list_selector": None,
-        "date_selector": None,
-    },
-    "BW Water": {
-        "url": None,  # TODO: find URL
-        "method": "cloudscraper",
-        "list_selector": None,
-        "date_selector": None,
-    },
     "BW Digital": {
-        "url": None,  # TODO: find URL
-        "method": "cloudscraper",
-        "list_selector": None,
+        "url": "https://www.bw-digital.com/news/",
+        "method": "playwright",  # "Load more" button, list appears to be JS/AJAX driven
+        "list_selector": None,  # UNVERIFIED — falls back to generic link-scan (see
+        # scrape_with_playwright). Couldn't confirm the real article-link CSS
+        # class without rendering the page myself. Run the workflow manually
+        # and check the logs for "Found via Playwright" lines under BW Digital
+        # — if it's stuck at 0, the JS list needs the "Load more" button
+        # clicked, which needs a small code addition, not just a selector.
         "date_selector": None,
     },
+    # BW LNG, BW Dry Cargo, and BW Water do not run independently-hosted
+    # news/press pages of their own — bw-group.com's own site nav links
+    # each of these back to a generic profile page on bw-group.com itself,
+    # not a press-release listing. Their announcements, when they happen,
+    # get covered by the "BW Group" central newsroom entry above instead.
+    # Confirmed by checking bw-group.com/our-businesses/ directly.
+    #
+    # BW Elara (desalination JV, bwelara.com) was checked too — it's a
+    # single-page marketing site with no news/press section at all yet.
 }
 
 # API Keys
@@ -162,7 +158,11 @@ GROQ_BATCH_SIZE = 10
 
 def get_date_range():
     today = datetime.now().date()
-    start_date = today - timedelta(days=7)
+    # 9 days, not 7 — gives a 2-day safety margin if a run is late or a
+    # prior run failed outright, without risking duplicates: the archive
+    # dedup check means re-catching an already-sent item is a no-op, it
+    # only widens the net for catching ones a strict 7-day window would miss.
+    start_date = today - timedelta(days=9)
     end_date = today
     return start_date, end_date
 
@@ -211,8 +211,21 @@ def save_archive(archive):
     with open(ARCHIVE_FILE, 'w') as f:
         json.dump(archive, f, indent=2)
 
-def is_new_item(url, archive):
-    return not any(item['url'] == url for item in archive)
+def _title_key(title, company):
+    """Normalized (company, title) pair for dedup — same press release
+    republished under a different URL (query params, site redesign,
+    trailing slash) still gets caught even when the raw URL doesn't match."""
+    normalized_title = re.sub(r'\s+', ' ', (title or '').strip().lower())
+    return (company, normalized_title)
+
+def is_new_item(item, archive):
+    item_title_key = _title_key(item.get('title'), item.get('company'))
+    for existing in archive:
+        if existing.get('url') == item['url']:
+            return False
+        if _title_key(existing.get('title'), existing.get('company')) == item_title_key:
+            return False
+    return True
 
 # =====================================================================
 # SECTION 4: TIER 1 - RSS FEED SCRAPING (Fastest)
@@ -258,6 +271,21 @@ def scrape_rss_feeds():
     logging.info(f"Found {len(collected_news)} articles via RSS")
     return collected_news
 
+def _get_with_retries(scraper, url, timeout=15, retries=2, backoff_seconds=3):
+    """A single dropped connection used to permanently lose that article
+    for the whole week (bare except -> continue, no retry). Most failures
+    at this layer are transient network blips, not real 404s, so give
+    each article a couple of extra tries before giving up on it."""
+    last_error = None
+    for attempt in range(retries + 1):
+        try:
+            return scraper.get(url, timeout=timeout)
+        except Exception as e:
+            last_error = e
+            if attempt < retries:
+                time.sleep(backoff_seconds)
+    raise last_error
+
 # =====================================================================
 # SECTION 5: TIER 2 - CLOUDSCRAPER (Bypasses basic Cloudflare)
 # =====================================================================
@@ -280,7 +308,7 @@ def scrape_with_cloudscraper():
         
         logging.info(f"Scanning {company_name} with cloudscraper...")
         try:
-            resp = scraper.get(news_url, timeout=15)
+            resp = _get_with_retries(scraper, news_url, timeout=15)
             soup = BeautifulSoup(resp.text, 'html.parser')
             
             # Capture (href, anchor_text) pairs, not just href — anchor
@@ -309,7 +337,7 @@ def scrape_with_cloudscraper():
                     break
                 full_url = href if href.startswith('http') else urljoin(news_url, href)
                 try:
-                    article_resp = scraper.get(full_url, timeout=15)
+                    article_resp = _get_with_retries(scraper, full_url, timeout=15)
                     article_soup = BeautifulSoup(article_resp.text, 'html.parser')
                     
                     pub_date = None
@@ -352,7 +380,8 @@ def scrape_with_cloudscraper():
                         })
                         logging.info(f"  Found via cloudscraper: {title}")
                         found_this_site += 1
-                except:
+                except Exception as e:
+                    logging.warning(f"  Skipping {full_url} after retries: {e}")
                     continue
         except Exception as e:
             logging.error(f"Cloudscraper failed for {company_name}: {e}")
@@ -411,7 +440,14 @@ def scrape_with_playwright():
                         break
                     full_url = href if href.startswith('http') else urljoin(news_url, href)
                     try:
-                        page.goto(full_url, wait_until='domcontentloaded', timeout=30000)
+                        for attempt in range(3):
+                            try:
+                                page.goto(full_url, wait_until='domcontentloaded', timeout=30000)
+                                break
+                            except Exception:
+                                if attempt == 2:
+                                    raise
+                                page.wait_for_timeout(3000)
                         page.wait_for_timeout(2000)
                         article_html = page.content()
                         article_soup = BeautifulSoup(article_html, 'html.parser')
@@ -454,7 +490,8 @@ def scrape_with_playwright():
                             })
                             logging.info(f"  Found via Playwright: {title}")
                             found_this_site += 1
-                    except:
+                    except Exception as e:
+                        logging.warning(f"  Skipping {full_url} after retries: {e}")
                         continue
             except Exception as e:
                 logging.error(f"Playwright failed for {company_name}: {e}")
@@ -656,8 +693,18 @@ def main():
     playwright_news = scrape_with_playwright()
     
     all_items = rss_news + cloudscraper_news + playwright_news
-    
-    new_items = [item for item in all_items if is_new_item(item['url'], archive)]
+
+    # Per-site summary so a 0-article site is visible at a glance in the
+    # logs instead of needing to scroll and count "Found via ..." lines.
+    counts_by_company = defaultdict(int)
+    for item in all_items:
+        counts_by_company[item['company']] += 1
+    active_sites = [name for name, cfg in COMPANY_SITES.items() if cfg['method'] != 'blocked' and cfg['url']]
+    logging.info("Per-site article counts this run:")
+    for name in active_sites:
+        logging.info(f"  {name}: {counts_by_company.get(name, 0)}")
+
+    new_items = [item for item in all_items if is_new_item(item, archive)]
     logging.info(f"After deduplication: {len(new_items)} new items")
     
     if not new_items:
