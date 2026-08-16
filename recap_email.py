@@ -235,7 +235,10 @@ def send_email(html_content, title_suffix=""):
     subject = f"ARCHIVE RECAP: BW Group News Digest {title_suffix}"
 
     # TEMPORARY DEBUG — remove once the 535 error is resolved.
-    logging.info(f"DEBUG: logging into Gmail as '{EMAIL_FROM}' with an app password of length {len(GMAIL_APP_PASSWORD) if GMAIL_APP_PASSWORD else 0}")
+    # GitHub masks the actual value since it's a secret, so compare instead
+    # of printing it directly — True/False and a number won't get redacted.
+    logging.info(f"DEBUG: EMAIL_FROM exactly matches 'vernonlee3701@gmail.com': {EMAIL_FROM == 'vernonlee3701@gmail.com'} (length: {len(EMAIL_FROM) if EMAIL_FROM else 0}, expected length: {len('vernonlee3701@gmail.com')})")
+    logging.info(f"DEBUG: app password length: {len(GMAIL_APP_PASSWORD) if GMAIL_APP_PASSWORD else 0} (expected: 16)")
 
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
