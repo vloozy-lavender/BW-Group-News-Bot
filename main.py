@@ -10,7 +10,9 @@ from datetime import datetime, timedelta
 from dateutil import parser as date_parser
 from urllib.parse import urljoin
 from groq import Groq
-import resend
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 from collections import defaultdict
 import urllib3
 import cloudscraper
@@ -139,8 +141,8 @@ COMPANY_SITES = {
 
 # API Keys
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-RESEND_API_KEY = os.getenv("RESEND_API_KEY")
-EMAIL_FROM = os.getenv("EMAIL_FROM", "news@yourdomain.com")
+GMAIL_APP_PASSWORD = os.getenv("GMAIL_APP_PASSWORD")
+EMAIL_FROM = os.getenv("EMAIL_FROM", "vernonlee3701@gmail.com")  # must match the Gmail account the app password belongs to
 
 # Support multiple recipients: EMAIL_TO secret can be "a@x.com,b@y.com"
 _raw_email_to = os.getenv("EMAIL_TO", "vernonlee37@gmail.com")
@@ -662,18 +664,20 @@ def generate_html_email(processed_items, start_date, end_date):
     return html
 
 def send_email(html_content, start_date, end_date):
-    resend.api_key = RESEND_API_KEY
     subject = f"BW Group Weekly Digest: {len(html_content.split('<tr>'))-1} Updates ({start_date.strftime('%b %d')} - {end_date.strftime('%b %d')})"
 
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = subject
+    msg["From"] = EMAIL_FROM
+    msg["To"] = ", ".join(EMAIL_TO)
+    msg.attach(MIMEText(html_content, "html"))
+
     try:
-        params = {
-            "from": EMAIL_FROM,
-            "to": EMAIL_TO,
-            "subject": subject,
-            "html": html_content,
-        }
-        email = resend.Emails.send(params)
-        logging.info(f"Email sent successfully: {email}")
+        with smtplib.SMTP("smtp.gmail.com", 587) as server:
+            server.starttls()
+            server.login(EMAIL_FROM, GMAIL_APP_PASSWORD)
+            server.sendmail(EMAIL_FROM, EMAIL_TO, msg.as_string())
+        logging.info(f"Email sent successfully to {EMAIL_TO}")
         return True
     except Exception as e:
         logging.error(f"Failed to send email: {e}")
