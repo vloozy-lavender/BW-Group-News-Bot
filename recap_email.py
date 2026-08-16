@@ -234,6 +234,9 @@ def send_email(html_content, title_suffix=""):
     """Send the email via Gmail SMTP."""
     subject = f"ARCHIVE RECAP: BW Group News Digest {title_suffix}"
 
+    # TEMPORARY DEBUG — remove once the 535 error is resolved.
+    logging.info(f"DEBUG: logging into Gmail as '{EMAIL_FROM}' with an app password of length {len(GMAIL_APP_PASSWORD) if GMAIL_APP_PASSWORD else 0}")
+
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
     msg["From"] = EMAIL_FROM
