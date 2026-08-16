@@ -141,6 +141,10 @@ COMPANY_SITES = {
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 # GMAIL_APP_PASSWORD, EMAIL_FROM, EMAIL_TO all live in email_sender.py now — imported above
 
+# One shared client, not one per article — avoids spinning up a fresh
+# HTTP connection pool for every single Groq call.
+groq_client = Groq(api_key=GROQ_API_KEY)
+
 ARCHIVE_FILE = "archive.json"
 
 # Groq Rate Limit Controls
@@ -211,8 +215,13 @@ def load_archive():
     return []
 
 def save_archive(archive):
-    with open(ARCHIVE_FILE, 'w') as f:
+    # Atomic write: build the full file elsewhere first, then swap it into
+    # place in one step. If the run gets killed mid-write, the original
+    # archive.json is untouched instead of ending up half-written/corrupt.
+    tmp_path = ARCHIVE_FILE + ".tmp"
+    with open(tmp_path, 'w') as f:
         json.dump(archive, f, indent=2)
+    os.replace(tmp_path, ARCHIVE_FILE)
 
 def _title_key(title, company):
     """Normalized (company, title) pair for dedup — same press release
@@ -521,11 +530,9 @@ Return a JSON object with exactly these fields:
 
 Return ONLY the JSON object. No markdown."""
 
-    client = Groq(api_key=GROQ_API_KEY)
-    
     for attempt in range(3):
         try:
-            completion = client.chat.completions.create(
+            completion = groq_client.chat.completions.create(
                 model="openai/gpt-oss-120b",
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.1,
