@@ -666,6 +666,11 @@ def generate_html_email(processed_items, start_date, end_date):
 def send_email(html_content, start_date, end_date):
     subject = f"BW Group Weekly Digest: {len(html_content.split('<tr>'))-1} Updates ({start_date.strftime('%b %d')} - {end_date.strftime('%b %d')})"
 
+    # TEMPORARY DEBUG — remove once the 535 error is resolved. Logging the
+    # password's length (not its value) is a safe way to confirm the secret
+    # actually contains something 16 chars long, no more no less.
+    logging.info(f"DEBUG: logging into Gmail as '{EMAIL_FROM}' with an app password of length {len(GMAIL_APP_PASSWORD) if GMAIL_APP_PASSWORD else 0}")
+
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
     msg["From"] = EMAIL_FROM
