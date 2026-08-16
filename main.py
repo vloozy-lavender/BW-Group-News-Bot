@@ -204,7 +204,15 @@ def extract_listing_date_fallback(anchor_text):
 def load_archive():
     if os.path.exists(ARCHIVE_FILE):
         with open(ARCHIVE_FILE, 'r') as f:
-            return json.load(f)
+            raw = f.read().strip()
+        if not raw:
+            logging.warning(f"{ARCHIVE_FILE} is empty — starting with a fresh archive.")
+            return []
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError as e:
+            logging.error(f"{ARCHIVE_FILE} is not valid JSON ({e}) — starting with a fresh archive instead of crashing. Fix the file on GitHub when convenient.")
+            return []
     return []
 
 def save_archive(archive):
