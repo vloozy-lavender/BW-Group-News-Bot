@@ -141,8 +141,11 @@ COMPANY_SITES = {
 
 # API Keys
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-GMAIL_APP_PASSWORD = os.getenv("GMAIL_APP_PASSWORD")
-EMAIL_FROM = os.getenv("EMAIL_FROM", "vernonlee3701@gmail.com")  # must match the Gmail account the app password belongs to
+# Gmail app passwords are often copied with spaces every 4 chars.
+# Normalize by removing all whitespace so SMTP auth still works.
+_raw_gmail_app_password = os.getenv("GMAIL_APP_PASSWORD", "")
+GMAIL_APP_PASSWORD = "".join(_raw_gmail_app_password.split()) if _raw_gmail_app_password else ""
+EMAIL_FROM = os.getenv("EMAIL_FROM", "vernonlee3701@gmail.com").strip()  # must match the Gmail account the app password belongs to
 
 # Support multiple recipients: EMAIL_TO secret can be "a@x.com,b@y.com"
 _raw_email_to = os.getenv("EMAIL_TO", "vernonlee37@gmail.com")
