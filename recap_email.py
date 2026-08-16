@@ -1,518 +1,86 @@
 import os
 import json
 import logging
-import time
 import requests
-import concurrent.futures
-import re
-from bs4 import BeautifulSoup
 from datetime import datetime, timedelta
-from dateutil import parser as date_parser
-from urllib.parse import urljoin
-from groq import Groq
-from email_sender import send_email as _send_email, EMAIL_FROM, EMAIL_TO
 from collections import defaultdict
-import urllib3
-import cloudscraper
-import feedparser
-from playwright.sync_api import sync_playwright
-
-# Disable SSL warnings for problematic corporate sites
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+from groq import Groq
+import concurrent.futures
+from email_sender import send_email as _send_email, EMAIL_FROM, EMAIL_TO
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-
-# =====================================================================
-# SECTION 1: CONFIGURATION & LIMITS
-# =====================================================================
-
-# RSS Feeds
-RSS_FEEDS = {}
-
-# Unified Company Sites Configuration
-#
-# method:
-#   "cloudscraper" — static HTML, no browser needed
-#   "playwright"    — JS-rendered listing/content, needs a real browser
-#   "blocked"       — confirmed Cloudflare bot-challenge as of last
-#                     inspection (checked 3x: cloudscraper, Playwright
-#                     w/ networkidle, Playwright w/ domcontentloaded — all
-#                     hit the actual challenge page, not the site). This
-#                     is NOT a selector problem. Skipped cleanly at
-#                     runtime with a clear log line instead of quietly
-#                     returning 0 and looking broken.
-COMPANY_SITES = {
-    "BW Group": {
-        "url": "https://bw-group.com/newsroom",
-        "method": "cloudscraper",
-        "list_selector": "section.o-entity__body a",
-        "date_selector": "time.o-entity__updated",
-    },
-    "BW Offshore": {
-        # NOTE: /news-media doesn't carry the actual release list; this
-        # (found via the site's own nav) does.
-        "url": "https://www.bwoffshore.com/all-press-releases",
-        "method": "playwright",  # Webflow CMS list, JS-rendered
-        "list_selector": "div.w-dyn-item a",
-        "date_selector": "div.text-block-433-copy",  # text only, e.g. "June 15, 2026"
-    },
-    "BW LPG": {
-        # NOTE: /press-releases 404s. Real listing is under /media/.
-        "url": "https://www.bwlpg.com/media/",
-        "method": "playwright",  # WordPress but list renders client-side
-        "list_selector": "div.article-container a",
-        "date_selector": "time.updated",  # has datetime="" attr
-    },
-    "BW Energy": {
-        "url": "https://www.bwenergy.no/news-and-media?category=press-releases",
-        "method": "cloudscraper",
-        "list_selector": "div.releases-body a",
-        "date_selector": "time.updated",  # has datetime="" attr
-    },
-    "Hafnia": {
-        "url": "https://investor.hafnia.com/news-events/press-releases",
-        "method": "blocked",
-        "list_selector": None,
-        "date_selector": None,
-    },
-    "Navigator Gas": {
-        "url": "https://investors.navigatorgas.com/news-events/press-releases",
-        "method": "blocked",
-        "list_selector": None,
-        "date_selector": None,
-    },
-    "Cadeler": {
-        "url": "https://ir.cadeler.com/press-releases",
-        "method": "playwright",  # cloudscraper 404s on this one, needs JS
-        "list_selector": "div.media-heading a",
-        "date_selector": "time.date",  # has datetime="" attr
-    },
-    "BW Epic Kosan": {
-        "url": "https://bwek.com/news",
-        "method": "blocked",
-        "list_selector": None,
-        "date_selector": None,
-    },
-    "BW Ideol": {
-        # NOTE: /category/financial-press-releases 404s. Real listing here.
-        "url": "https://bw-ideol.com/en/latest-news",
-        "method": "playwright",  # cloudscraper only sees nav, needs JS
-        "list_selector": "div.ctnr a",
-        "date_selector": "time",  # has datetime="" attr
-    },
-    "BW ESS": {
-        "url": "https://bw-ess.com/news",
-        "method": "cloudscraper",
-        "list_selector": "h2 a",
-        "date_selector": "div.news-date",  # text only, e.g. "01.07.2026" (DD.MM.YYYY)
-    },
-    "Corvus Energy": {
-        "url": "https://corvusenergy.com/news",
-        "method": "cloudscraper",  # listing works fine with cloudscraper
-        "list_selector": "div.ssr-variant.hidden-vpufh4.hidden-h2smca a",
-        "date_selector": None,  # article pages have NO date anywhere (checked
-        # text, datetime attrs, and JSON-LD) — date is pulled from the
-        # listing link's own text instead, see extract_listing_date_fallback()
-    },
-    "BW Digital": {
-        "url": "https://www.bw-digital.com/news/",
-        "method": "playwright",  # "Load more" button, list appears to be JS/AJAX driven
-        "list_selector": None,  # UNVERIFIED — falls back to generic link-scan (see
-        # scrape_with_playwright). Couldn't confirm the real article-link CSS
-        # class without rendering the page myself. Run the workflow manually
-        # and check the logs for "Found via Playwright" lines under BW Digital
-        # — if it's stuck at 0, the JS list needs the "Load more" button
-        # clicked, which needs a small code addition, not just a selector.
-        "date_selector": None,
-    },
-    # BW LNG, BW Dry Cargo, and BW Water do not run independently-hosted
-    # news/press pages of their own — bw-group.com's own site nav links
-    # each of these back to a generic profile page on bw-group.com itself,
-    # not a press-release listing. Their announcements, when they happen,
-    # get covered by the "BW Group" central newsroom entry above instead.
-    # Confirmed by checking bw-group.com/our-businesses/ directly.
-    #
-    # BW Elara (desalination JV, bwelara.com) was checked too — it's a
-    # single-page marketing site with no news/press section at all yet.
-}
 
 # API Keys
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 # GMAIL_APP_PASSWORD, EMAIL_FROM, EMAIL_TO all live in email_sender.py now — imported above
 
-ARCHIVE_FILE = "archive.json"
+# One shared client, not one per article.
+groq_client = Groq(api_key=GROQ_API_KEY)
 
-# Groq Rate Limit Controls
-GROQ_MAX_CONCURRENT = 5
-GROQ_BATCH_SIZE = 10
+# GitHub repo info (to fetch archive.json)
+GITHUB_REPO = "vloozy-lavender/BW-Group-News-Bot"
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")  # Optional, for private repos
 
-# =====================================================================
-# SECTION 2: DATE LOGIC (Weekly: Last 7 days)
-# =====================================================================
+def load_archive_from_github():
+    """Fetch archive.json directly from GitHub repository."""
+    if GITHUB_TOKEN:
+        # For private repos
+        url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/archive.json"
+        headers = {"Authorization": f"token {GITHUB_TOKEN}"}
+        resp = requests.get(url, headers=headers)
+    else:
+        # For public repos
+        url = f"https://raw.githubusercontent.com/{GITHUB_REPO}/main/archive.json"
+        resp = requests.get(url)
+    
+    if resp.status_code == 200:
+        if GITHUB_TOKEN:
+            # GitHub API returns base64 encoded content
+            import base64
+            content = resp.json().get('content', '')
+            decoded = base64.b64decode(content).decode('utf-8')
+            return json.loads(decoded)
+        else:
+            return resp.json()
+    else:
+        logging.error(f"Failed to fetch archive.json: {resp.status_code}")
+        return []
 
-def get_date_range():
-    today = datetime.now().date()
-    # 9 days, not 7 — gives a 2-day safety margin if a run is late or a
-    # prior run failed outright, without risking duplicates: the archive
-    # dedup check means re-catching an already-sent item is a no-op, it
-    # only widens the net for catching ones a strict 7-day window would miss.
-    start_date = today - timedelta(days=9)
-    end_date = today
-    return start_date, end_date
-
-
-def parse_date_dayfirst(raw):
-    """Wraps date_parser.parse with dayfirst=True.
-
-    Several sites (BW ESS: '01.07.2026', BW Ideol: '24/03/2026') use the
-    European day-first numeric convention. dateutil does NOT assume this
-    by default and will silently read '01.07.2026' as Jan 7 instead of
-    Jul 1 without the flag — this was a real bug caught in testing.
-    Month-name and ISO formats are unambiguous either way, so this is
-    safe to apply everywhere.
-    """
-    if not raw:
-        return None
+def load_archive_from_local():
+    """Load archive.json from local file system."""
     try:
-        return date_parser.parse(raw, dayfirst=True).date()
-    except (ValueError, OverflowError):
-        return None
+        with open('archive.json', 'r') as f:
+            return json.load(f)
+    except FileNotFoundError:
+        logging.error("archive.json not found locally")
+        return []
 
-
-def extract_listing_date_fallback(anchor_text):
-    """Corvus Energy's article pages have no date anywhere (checked text,
-    datetime attrs, and JSON-LD) — but the listing page's own link text
-    embeds it, e.g. 'April 30, 2026Press ReleaseCorvus Energy Achieves...'.
-    Used as a last-resort fallback when normal date extraction fails."""
-    if not anchor_text:
-        return None
-    match = re.match(r"^([A-Z][a-z]+ \d{1,2},\s*\d{4})", anchor_text.strip())
-    if match:
-        return parse_date_dayfirst(match.group(1))
-    return None
-
-# =====================================================================
-# SECTION 3: ARCHIVE MANAGEMENT (Deduplication)
-# =====================================================================
-
-def load_archive():
-    if os.path.exists(ARCHIVE_FILE):
-        with open(ARCHIVE_FILE, 'r') as f:
-            raw = f.read().strip()
-        if not raw:
-            logging.warning(f"{ARCHIVE_FILE} is empty — starting with a fresh archive.")
-            return []
+def filter_by_date_range(items, days_back=None):
+    """Filter items by date range. If days_back is None, return all items."""
+    if days_back is None:
+        return items
+    
+    cutoff_date = datetime.now().date() - timedelta(days=days_back)
+    filtered = []
+    
+    for item in items:
         try:
-            return json.loads(raw)
-        except json.JSONDecodeError as e:
-            logging.error(f"{ARCHIVE_FILE} is not valid JSON ({e}) — starting with a fresh archive instead of crashing. Fix the file on GitHub when convenient.")
-            return []
-    return []
-
-def save_archive(archive):
-    with open(ARCHIVE_FILE, 'w') as f:
-        json.dump(archive, f, indent=2)
-
-def _title_key(title, company):
-    """Normalized (company, title) pair for dedup — same press release
-    republished under a different URL (query params, site redesign,
-    trailing slash) still gets caught even when the raw URL doesn't match."""
-    normalized_title = re.sub(r'\s+', ' ', (title or '').strip().lower())
-    return (company, normalized_title)
-
-def is_new_item(item, archive):
-    item_title_key = _title_key(item.get('title'), item.get('company'))
-    for existing in archive:
-        if existing.get('url') == item['url']:
-            return False
-        if _title_key(existing.get('title'), existing.get('company')) == item_title_key:
-            return False
-    return True
-
-# =====================================================================
-# SECTION 4: TIER 1 - RSS FEED SCRAPING (Fastest)
-# =====================================================================
-
-def scrape_rss_feeds():
-    """Scrape news from RSS feeds. This is instant and 100% reliable."""
-    start_date, end_date = get_date_range()
-    logging.info(f"Scraping RSS feeds from {start_date} to {end_date}")
-    collected_news = []
+            item_date = datetime.strptime(item.get('date', ''), '%Y-%m-%d').date()
+            if item_date >= cutoff_date:
+                filtered.append(item)
+        except:
+            # If date parsing fails, include the item anyway
+            filtered.append(item)
     
-    for company_name, rss_url in RSS_FEEDS.items():
-        if not rss_url:
-            continue
-            
-        logging.info(f"Reading RSS feed for {company_name}...")
-        try:
-            feed = feedparser.parse(rss_url)
-            for entry in feed.entries:
-                pub_date = None
-                if hasattr(entry, 'published_parsed') and entry.published_parsed:
-                    pub_date = datetime(*entry.published_parsed[:6]).date()
-                elif hasattr(entry, 'updated_parsed') and entry.updated_parsed:
-                    pub_date = datetime(*entry.updated_parsed[:6]).date()
-                
-                if pub_date and start_date <= pub_date <= end_date:
-                    title = entry.get('title', 'No Title')
-                    link = entry.get('link', '')
-                    summary = entry.get('summary', '')[:500]
-                    
-                    collected_news.append({
-                        'url': link,
-                        'title': title,
-                        'date': pub_date,
-                        'text': summary,
-                        'company': company_name,
-                        'source': 'rss'
-                    })
-                    logging.info(f"  Found via RSS: {title}")
-        except Exception as e:
-            logging.error(f"Failed to read RSS feed for {company_name}: {e}")
-    
-    logging.info(f"Found {len(collected_news)} articles via RSS")
-    return collected_news
-
-def _get_with_retries(scraper, url, timeout=15, retries=2, backoff_seconds=3):
-    """A single dropped connection used to permanently lose that article
-    for the whole week (bare except -> continue, no retry). Most failures
-    at this layer are transient network blips, not real 404s, so give
-    each article a couple of extra tries before giving up on it."""
-    last_error = None
-    for attempt in range(retries + 1):
-        try:
-            return scraper.get(url, timeout=timeout)
-        except Exception as e:
-            last_error = e
-            if attempt < retries:
-                time.sleep(backoff_seconds)
-    raise last_error
-
-# =====================================================================
-# SECTION 5: TIER 2 - CLOUDSCRAPER (Bypasses basic Cloudflare)
-# =====================================================================
-
-def scrape_with_cloudscraper():
-    """Use cloudscraper to bypass basic anti-bot security."""
-    start_date, end_date = get_date_range()
-    logging.info(f"Scraping with cloudscraper from {start_date} to {end_date}")
-    collected_news = []
-    
-    scraper = cloudscraper.create_scraper()
-    
-    for company_name, config in COMPANY_SITES.items():
-        if config['method'] != 'cloudscraper' or not config['url']:
-            continue
-            
-        news_url = config['url']
-        list_selector = config['list_selector']
-        date_selector = config['date_selector']
-        
-        logging.info(f"Scanning {company_name} with cloudscraper...")
-        try:
-            resp = _get_with_retries(scraper, news_url, timeout=15)
-            soup = BeautifulSoup(resp.text, 'html.parser')
-            
-            # Capture (href, anchor_text) pairs, not just href — anchor
-            # text is needed as a date fallback for sites like Corvus
-            # Energy where the article page itself has no date at all.
-            if list_selector:
-                link_pairs = [(a['href'], a.get_text(strip=True)) for a in soup.select(list_selector) if a.get('href')]
-            else:
-                link_pairs = []
-                for a in soup.find_all('a', href=True):
-                    href = a['href']
-                    if any(x in href.lower() for x in ['facebook', 'twitter', 'linkedin', 'mailto:', '#', '.pdf', '.jpg', 'tradingview', 'widget']):
-                        continue
-                    full_url = urljoin(news_url, href)
-                    if len(href.split('/')) > 2:
-                        link_pairs.append((full_url, a.get_text(strip=True)))
-            
-            # Cap per-site fetches to keep runtime sane, but don't stop
-            # after the first match — a `break` here previously meant
-            # each site could contribute at most 1 article per run,
-            # regardless of how many were actually published that week.
-            found_this_site = 0
-            MAX_PER_SITE = 20
-            for href, anchor_text in link_pairs:
-                if found_this_site >= MAX_PER_SITE:
-                    break
-                full_url = href if href.startswith('http') else urljoin(news_url, href)
-                try:
-                    article_resp = _get_with_retries(scraper, full_url, timeout=15)
-                    article_soup = BeautifulSoup(article_resp.text, 'html.parser')
-                    
-                    pub_date = None
-                    if date_selector:
-                        date_el = article_soup.select_one(date_selector)
-                        if date_el:
-                            dt = date_el.get('datetime') or date_el.get_text(strip=True)
-                            if dt:
-                                pub_date = parse_date_dayfirst(dt)
-                    
-                    if not pub_date:
-                        meta_date = article_soup.find('meta', property='article:published_time')
-                        if meta_date and meta_date.get('content'):
-                            pub_date = parse_date_dayfirst(meta_date['content'])
-                    
-                    if not pub_date:
-                        time_tag = article_soup.find('time')
-                        if time_tag and time_tag.get('datetime'):
-                            pub_date = parse_date_dayfirst(time_tag['datetime'])
-
-                    if not pub_date:
-                        # Last resort: date embedded in the listing link's
-                        # own text (Corvus Energy pattern).
-                        pub_date = extract_listing_date_fallback(anchor_text)
-                    
-                    if pub_date and start_date <= pub_date <= end_date:
-                        title = article_soup.title.get_text(strip=True) if article_soup.title else "No Title"
-                        for element in article_soup(["script", "style", "nav", "header", "footer"]):
-                            element.extract()
-                        paragraphs = article_soup.find_all('p')
-                        text = "\n".join([p.get_text(strip=True) for p in paragraphs if len(p.get_text(strip=True)) > 20])
-                        
-                        collected_news.append({
-                            'url': full_url,
-                            'title': title,
-                            'date': pub_date,
-                            'text': text[:500],
-                            'company': company_name,
-                            'source': 'cloudscraper'
-                        })
-                        logging.info(f"  Found via cloudscraper: {title}")
-                        found_this_site += 1
-                except Exception as e:
-                    logging.warning(f"  Skipping {full_url} after retries: {e}")
-                    continue
-        except Exception as e:
-            logging.error(f"Cloudscraper failed for {company_name}: {e}")
-    
-    logging.info(f"Found {len(collected_news)} articles via cloudscraper")
-    return collected_news
-
-# =====================================================================
-# SECTION 6: TIER 3 - PLAYWRIGHT (Heavy JavaScript sites)
-# =====================================================================
-
-def scrape_with_playwright():
-    """Use Playwright for sites with heavy JavaScript."""
-    start_date, end_date = get_date_range()
-    logging.info(f"Scraping with Playwright from {start_date} to {end_date}")
-    collected_news = []
-    
-    playwright_sites = {k: v for k, v in COMPANY_SITES.items() if v['method'] == 'playwright' and v['url']}
-    
-    if not playwright_sites:
-        logging.info("No Playwright sites configured")
-        return collected_news
-    
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        page = browser.new_page()
-        
-        for company_name, config in playwright_sites.items():
-            news_url = config['url']
-            list_selector = config['list_selector']
-            date_selector = config['date_selector']
-            
-            logging.info(f"Scanning {company_name} with Playwright...")
-            try:
-                page.goto(news_url, wait_until='domcontentloaded', timeout=60000)
-                page.wait_for_timeout(4000)  # let client-side rendering settle
-                html = page.content()
-                soup = BeautifulSoup(html, 'html.parser')
-                
-                if list_selector:
-                    link_pairs = [(a['href'], a.get_text(strip=True)) for a in soup.select(list_selector) if a.get('href')]
-                else:
-                    link_pairs = []
-                    for a in soup.find_all('a', href=True):
-                        href = a['href']
-                        if any(x in href.lower() for x in ['facebook', 'twitter', 'linkedin', 'mailto:', '#', '.pdf', '.jpg']):
-                            continue
-                        full_url = urljoin(news_url, href)
-                        if len(href.split('/')) > 2:
-                            link_pairs.append((full_url, a.get_text(strip=True)))
-                
-                found_this_site = 0
-                MAX_PER_SITE = 20
-                for href, anchor_text in link_pairs:
-                    if found_this_site >= MAX_PER_SITE:
-                        break
-                    full_url = href if href.startswith('http') else urljoin(news_url, href)
-                    try:
-                        for attempt in range(3):
-                            try:
-                                page.goto(full_url, wait_until='domcontentloaded', timeout=30000)
-                                break
-                            except Exception:
-                                if attempt == 2:
-                                    raise
-                                page.wait_for_timeout(3000)
-                        page.wait_for_timeout(2000)
-                        article_html = page.content()
-                        article_soup = BeautifulSoup(article_html, 'html.parser')
-                        
-                        pub_date = None
-                        if date_selector:
-                            date_el = article_soup.select_one(date_selector)
-                            if date_el:
-                                dt = date_el.get('datetime') or date_el.get_text(strip=True)
-                                if dt:
-                                    pub_date = parse_date_dayfirst(dt)
-                        
-                        if not pub_date:
-                            meta_date = article_soup.find('meta', property='article:published_time')
-                            if meta_date and meta_date.get('content'):
-                                pub_date = parse_date_dayfirst(meta_date['content'])
-                        
-                        if not pub_date:
-                            time_tag = article_soup.find('time')
-                            if time_tag and time_tag.get('datetime'):
-                                pub_date = parse_date_dayfirst(time_tag['datetime'])
-
-                        if not pub_date:
-                            pub_date = extract_listing_date_fallback(anchor_text)
-                        
-                        if pub_date and start_date <= pub_date <= end_date:
-                            title = article_soup.title.get_text(strip=True) if article_soup.title else "No Title"
-                            for element in article_soup(["script", "style", "nav", "header", "footer"]):
-                                element.extract()
-                            paragraphs = article_soup.find_all('p')
-                            text = "\n".join([p.get_text(strip=True) for p in paragraphs if len(p.get_text(strip=True)) > 20])
-                            
-                            collected_news.append({
-                                'url': full_url,
-                                'title': title,
-                                'date': pub_date,
-                                'text': text[:500],
-                                'company': company_name,
-                                'source': 'playwright'
-                            })
-                            logging.info(f"  Found via Playwright: {title}")
-                            found_this_site += 1
-                    except Exception as e:
-                        logging.warning(f"  Skipping {full_url} after retries: {e}")
-                        continue
-            except Exception as e:
-                logging.error(f"Playwright failed for {company_name}: {e}")
-        
-        browser.close()
-    
-    logging.info(f"Found {len(collected_news)} articles via Playwright")
-    return collected_news
-
-# =====================================================================
-# SECTION 7: AI PROCESSING (CONCURRENT BATCHING WITH RATE LIMITS)
-# =====================================================================
+    return filtered
 
 def process_single_item(item):
-    prompt = f"""You are a corporate news analyst. Analyze this single update from {item['company']}.
+    """Processes exactly ONE item with Groq."""
+    prompt = f"""You are a corporate news analyst. Analyze this single update from {item.get('company', 'Unknown')}.
 
-Text: {item['text']}
-Title: {item['title']}
+Text: {item.get('text', '')[:500]}
+Title: {item.get('title', 'No Title')}
 
 Return a JSON object with exactly these fields:
 - "headline": A short, punchy headline (max 10 words).
@@ -521,70 +89,54 @@ Return a JSON object with exactly these fields:
 
 Return ONLY the JSON object. No markdown."""
 
-    client = Groq(api_key=GROQ_API_KEY)
-    
-    for attempt in range(3):
-        try:
-            completion = client.chat.completions.create(
-                model="openai/gpt-oss-120b",
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.1,
-                max_tokens=600,
-                reasoning_effort="low",
-                response_format={"type": "json_object"}
-            )
-            parsed = json.loads(completion.choices[0].message.content)
-            parsed['url'] = item['url']
-            parsed['company'] = item['company']
-            parsed['date'] = str(item['date'])
-            return parsed
-        except Exception as e:
-            err_str = str(e).lower()
-            if '429' in err_str or 'rate_limit' in err_str:
-                logging.warning(f"Groq rate limit hit for {item['url']}. Retrying in 5s... (Attempt {attempt + 1}/3)")
-                time.sleep(5)
-            else:
-                logging.error(f"Groq failed for {item['url']}: {e}")
-                break
-                
-    return {
-        'headline': item['title'],
-        'summary': 'Summary unavailable.',
-        'category': 'General News',
-        'url': item['url'],
-        'company': item['company'],
-        'date': str(item['date'])
-    }
+    try:
+        completion = groq_client.chat.completions.create(
+            model="openai/gpt-oss-120b",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.1,
+            max_tokens=600,
+            reasoning_effort="low",
+            response_format={"type": "json_object"}
+        )
+        parsed = json.loads(completion.choices[0].message.content)
+        parsed['url'] = item.get('url', '#')
+        parsed['company'] = item.get('company', 'Unknown')
+        parsed['date'] = item.get('date', 'Unknown')
+        return parsed
+    except Exception as e:
+        logging.error(f"Groq failed for {item.get('url')}: {e}")
+        return {
+            'headline': item.get('title', 'No Title'),
+            'summary': 'Summary unavailable.',
+            'category': 'General News',
+            'url': item.get('url', '#'),
+            'company': item.get('company', 'Unknown'),
+            'date': item.get('date', 'Unknown')
+        }
 
 def process_with_groq_concurrent(all_items):
+    """Uses ThreadPoolExecutor to process items concurrently."""
     if not all_items:
         return []
     
     logging.info(f"Processing {len(all_items)} items with Groq concurrently...")
     processed_items = []
     
-    total_chunks = (len(all_items) + GROQ_BATCH_SIZE - 1) // GROQ_BATCH_SIZE
-    
-    for i in range(0, len(all_items), GROQ_BATCH_SIZE):
-        chunk = all_items[i:i+GROQ_BATCH_SIZE]
-        chunk_num = i // GROQ_BATCH_SIZE + 1
-        logging.info(f"Processing chunk {chunk_num}/{total_chunks} ({len(chunk)} items)...")
+    # Process in batches to avoid overwhelming the API
+    batch_size = 10
+    for i in range(0, len(all_items), batch_size):
+        batch = all_items[i:i+batch_size]
+        logging.info(f"Processing batch {i//batch_size + 1}/{(len(all_items) + batch_size - 1)//batch_size}")
         
-        with concurrent.futures.ThreadPoolExecutor(max_workers=GROQ_MAX_CONCURRENT) as executor:
-            futures = {executor.submit(process_single_item, item): item for item in chunk}
+        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+            futures = {executor.submit(process_single_item, item): item for item in batch}
             for future in concurrent.futures.as_completed(futures):
                 processed_items.append(future.result())
-                
-        if i + GROQ_BATCH_SIZE < len(all_items):
-            time.sleep(2)
             
     return processed_items
 
-# =====================================================================
-# SECTION 8: HTML TABLE EMAIL GENERATION & DELIVERY
-# =====================================================================
-
-def generate_html_email(processed_items, start_date, end_date):
+def generate_html_email(processed_items, title_suffix=""):
+    """Generate HTML email with tables."""
     grouped = defaultdict(list)
     for item in processed_items:
         cat = item.get('category', 'General News')
@@ -596,13 +148,29 @@ def generate_html_email(processed_items, start_date, end_date):
     th_style = 'style="background-color: #f4f4f4; text-align: left; padding: 10px; border: 1px solid #ddd;"'
     td_style = 'style="padding: 10px; border: 1px solid #ddd; vertical-align: top;"'
 
+    # Calculate date range from items
+    dates = []
+    for item in processed_items:
+        try:
+            date_obj = datetime.strptime(item.get('date', ''), '%Y-%m-%d')
+            dates.append(date_obj)
+        except:
+            pass
+    
+    if dates:
+        start_date = min(dates)
+        end_date = max(dates)
+        date_range_str = f"{start_date.strftime('%b %d, %Y')} - {end_date.strftime('%b %d, %Y')}"
+    else:
+        date_range_str = "Date range unavailable"
+
     html = f"""
     <html>
     <body style="font-family: Arial, sans-serif; line-height: 1.5; color: #333; max-width: 900px; margin: 0 auto;">
-        <h1 style="color: #003366; font-size: 24px; margin-bottom: 5px;">BW Group Weekly Intelligence Digest</h1>
+        <h1 style="color: #003366; font-size: 24px; margin-bottom: 5px;">BW Group Archive Recap {title_suffix}</h1>
         <p style="color: #666; font-size: 14px; margin-top: 0;">
-            <strong>Week of:</strong> {start_date.strftime('%b %d')} - {end_date.strftime('%b %d, %Y')}<br>
-            <strong>Total Updates:</strong> {len(processed_items)} items tracked across all subsidiaries.
+            <strong>Date Range:</strong> {date_range_str}<br>
+            <strong>Total Items:</strong> {len(processed_items)} items tracked across all subsidiaries.
         </p>
         <hr style="border: 0; border-top: 2px solid #003366; margin: 20px 0;">
     """
@@ -612,6 +180,7 @@ def generate_html_email(processed_items, start_date, end_date):
         if not items:
             continue
             
+        # Sort by date descending
         items.sort(key=lambda x: x.get('date', '1970-01-01'), reverse=True)
         
         html += f"<h2 style='color: #0066cc; font-size: 18px; border-bottom: 2px solid #0066cc; padding-bottom: 5px; margin-top: 30px;'>{category} ({len(items)})</h2>"
@@ -649,80 +218,69 @@ def generate_html_email(processed_items, start_date, end_date):
     html += """
     <hr style="border: 0; border-top: 1px solid #ddd; margin: 30px 0;">
     <p style="color: #999; font-size: 12px; text-align: center;">
-        Generated automatically by the BW Group News Bot.
+        ARCHIVE RECAP - Generated by BW Group News Bot
     </p>
     </body>
     </html>
     """
     return html
 
-def send_email(html_content, start_date, end_date):
-    subject = f"BW Group Weekly Digest: {len(html_content.split('<tr>'))-1} Updates ({start_date.strftime('%b %d')} - {end_date.strftime('%b %d')})"
+def send_email(html_content, title_suffix=""):
+    """Send the email via Gmail SMTP."""
+    subject = f"ARCHIVE RECAP: BW Group News Digest {title_suffix}"
     return _send_email(subject, html_content)
 
-# =====================================================================
-# SECTION 9: MAIN EXECUTION
-# =====================================================================
-
 def main():
-    logging.info("Starting BW Group Weekly News Bot (Hybrid Mode)...")
+    import argparse
     
-    blocked = {k: v for k, v in COMPANY_SITES.items() if v['method'] == 'blocked'}
-    if blocked:
-        logging.warning(
-            f"Skipping {len(blocked)} site(s) blocked by Cloudflare bot-protection "
-            f"(confirmed, not a selector issue): {', '.join(blocked)}"
-        )
-
-    archive = load_archive()
-    logging.info(f"Archive contains {len(archive)} previously sent items")
+    parser = argparse.ArgumentParser(description='Generate recap email from archive.json')
+    parser.add_argument('--days', type=int, help='Only include items from the last X days')
+    parser.add_argument('--local', action='store_true', help='Load archive.json from local file instead of GitHub')
+    args = parser.parse_args()
     
-    rss_news = scrape_rss_feeds()
-    cloudscraper_news = scrape_with_cloudscraper()
-    playwright_news = scrape_with_playwright()
+    logging.info("Starting archive recap email generation...")
     
-    all_items = rss_news + cloudscraper_news + playwright_news
-
-    # Per-site summary so a 0-article site is visible at a glance in the
-    # logs instead of needing to scroll and count "Found via ..." lines.
-    counts_by_company = defaultdict(int)
-    for item in all_items:
-        counts_by_company[item['company']] += 1
-    active_sites = [name for name, cfg in COMPANY_SITES.items() if cfg['method'] != 'blocked' and cfg['url']]
-    logging.info("Per-site article counts this run:")
-    for name in active_sites:
-        logging.info(f"  {name}: {counts_by_company.get(name, 0)}")
-
-    new_items = [item for item in all_items if is_new_item(item, archive)]
-    logging.info(f"After deduplication: {len(new_items)} new items")
+    # Load archive
+    if args.local:
+        logging.info("Loading archive.json from local file...")
+        archive = load_archive_from_local()
+    else:
+        logging.info("Fetching archive.json from GitHub...")
+        archive = load_archive_from_github()
     
-    if not new_items:
-        logging.info("No new items to report")
+    if not archive:
+        logging.error("No items found in archive")
         return
     
-    processed_items = process_with_groq_concurrent(new_items)
+    logging.info(f"Loaded {len(archive)} items from archive")
     
-    start_date, end_date = get_date_range()
-    html_content = generate_html_email(processed_items, start_date, end_date)
-    email_sent = send_email(html_content, start_date, end_date)
-
-    if not email_sent:
-        # Don't mark these items as archived if the email never went out —
-        # otherwise they're silently skipped forever and no one notices.
-        logging.error("Email failed to send. Archive was NOT updated, so these items will be retried next run.")
-        raise SystemExit(1)  # make the GitHub Actions run show as failed
-
-    for item in new_items:
-        try:
-            item['date'] = item['date'].strftime('%Y-%m-%d')
-        except Exception as e:
-            logging.warning(f"Could not convert date for {item.get('url')}: {e}")
-            
-    archive.extend(new_items)
-    save_archive(archive)
-    logging.info(f"Archive updated. Total items: {len(archive)}")
+    # Filter by date range if specified
+    if args.days:
+        archive = filter_by_date_range(archive, args.days)
+        logging.info(f"After filtering to last {args.days} days: {len(archive)} items")
     
-    logging.info("Bot finished successfully")
+    if not archive:
+        logging.error("No items match the date filter")
+        return
+    
+    # Process with AI
+    processed_items = process_with_groq_concurrent(archive)
+    
+    # Generate title suffix
+    if args.days:
+        title_suffix = f"(Last {args.days} Days)"
+    else:
+        title_suffix = "(All Time)"
+    
+    # Generate and send email
+    html_content = generate_html_email(processed_items, title_suffix)
+    email_sent = send_email(html_content, title_suffix)
+
+    if email_sent:
+        logging.info("Archive recap email sent successfully!")
+    else:
+        logging.error("Archive recap email FAILED to send — see the error above.")
+        raise SystemExit(1)  # make the GitHub Actions run show as failed, not a false green check
 
 if __name__ == "__main__":
     main()
