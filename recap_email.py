@@ -2,7 +2,9 @@ import os
 import json
 import logging
 import requests
-import resend
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 from datetime import datetime, timedelta
 from collections import defaultdict
 from groq import Groq
@@ -13,8 +15,8 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 
 # API Keys
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-RESEND_API_KEY = os.getenv("RESEND_API_KEY")
-EMAIL_FROM = os.getenv("EMAIL_FROM", "news@yourdomain.com")
+GMAIL_APP_PASSWORD = os.getenv("GMAIL_APP_PASSWORD")
+EMAIL_FROM = os.getenv("EMAIL_FROM", "vernonlee3701@gmail.com")  # must match the Gmail account the app password belongs to
 
 # Support multiple emails separated by commas
 raw_email_to = os.getenv("EMAIL_TO", "vernonlee37@gmail.com")
@@ -229,19 +231,21 @@ def generate_html_email(processed_items, title_suffix=""):
     return html
 
 def send_email(html_content, title_suffix=""):
-    """Send the email via Resend."""
-    resend.api_key = RESEND_API_KEY
+    """Send the email via Gmail SMTP."""
     subject = f"ARCHIVE RECAP: BW Group News Digest {title_suffix}"
-    
+
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = subject
+    msg["From"] = EMAIL_FROM
+    msg["To"] = ", ".join(EMAIL_TO)
+    msg.attach(MIMEText(html_content, "html"))
+
     try:
-        params = {
-            "from": EMAIL_FROM,
-            "to": EMAIL_TO,
-            "subject": subject,
-            "html": html_content,
-        }
-        email = resend.Emails.send(params)
-        logging.info(f"Email sent successfully: {email}")
+        with smtplib.SMTP("smtp.gmail.com", 587) as server:
+            server.starttls()
+            server.login(EMAIL_FROM, GMAIL_APP_PASSWORD)
+            server.sendmail(EMAIL_FROM, EMAIL_TO, msg.as_string())
+        logging.info(f"Email sent successfully to {EMAIL_TO}")
         return True
     except Exception as e:
         logging.error(f"Failed to send email: {e}")
