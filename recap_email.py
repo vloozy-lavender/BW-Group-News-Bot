@@ -242,8 +242,10 @@ def send_email(html_content, title_suffix=""):
         }
         email = resend.Emails.send(params)
         logging.info(f"Email sent successfully: {email}")
+        return True
     except Exception as e:
         logging.error(f"Failed to send email: {e}")
+        return False
 
 def main():
     import argparse
@@ -289,9 +291,13 @@ def main():
     
     # Generate and send email
     html_content = generate_html_email(processed_items, title_suffix)
-    send_email(html_content, title_suffix)
-    
-    logging.info("Archive recap email sent successfully!")
+    email_sent = send_email(html_content, title_suffix)
+
+    if email_sent:
+        logging.info("Archive recap email sent successfully!")
+    else:
+        logging.error("Archive recap email FAILED to send — see the error above.")
+        raise SystemExit(1)  # make the GitHub Actions run show as failed, not a false green check
 
 if __name__ == "__main__":
     main()
