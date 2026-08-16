@@ -2,7 +2,6 @@ requests
 beautifulsoup4
 python-dateutil
 groq
-resend
 cloudscraper
 feedparser
 playwright
