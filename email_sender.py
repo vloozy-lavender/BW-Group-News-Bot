@@ -40,7 +40,14 @@ def send_email(subject, html_content):
         with smtplib.SMTP("smtp.gmail.com", 587) as server:
             server.starttls()
             server.login(EMAIL_FROM, GMAIL_APP_PASSWORD)
-            server.sendmail(EMAIL_FROM, EMAIL_TO, msg.as_string())
+            refused = server.sendmail(EMAIL_FROM, EMAIL_TO, msg.as_string())
+        # sendmail() does NOT raise if it succeeds for at least one
+        # recipient — a partially-rejected send (one address bad, one
+        # fine) would silently look identical to a full success without
+        # this check.
+        if refused:
+            logging.error(f"Email accepted for some recipients but refused for others: {refused}")
+            return False
         logging.info(f"Email sent successfully to {EMAIL_TO}")
         return True
     except Exception as e:
