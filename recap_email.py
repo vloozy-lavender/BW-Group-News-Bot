@@ -94,10 +94,11 @@ Return ONLY the JSON object. No markdown."""
     client = Groq(api_key=GROQ_API_KEY)
     try:
         completion = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
+            model="openai/gpt-oss-120b",
             messages=[{"role": "user", "content": prompt}],
             temperature=0.1,
-            max_tokens=300,
+            max_tokens=600,
+            reasoning_effort="low",
             response_format={"type": "json_object"}
         )
         parsed = json.loads(completion.choices[0].message.content)
