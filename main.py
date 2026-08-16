@@ -145,7 +145,10 @@ COMPANY_SITES = {
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 RESEND_API_KEY = os.getenv("RESEND_API_KEY")
 EMAIL_FROM = os.getenv("EMAIL_FROM", "news@yourdomain.com")
-EMAIL_TO = os.getenv("EMAIL_TO", "vernonlee37@gmail.com")
+
+# Support multiple recipients: EMAIL_TO secret can be "a@x.com,b@y.com"
+_raw_email_to = os.getenv("EMAIL_TO", "vernonlee37@gmail.com")
+EMAIL_TO = [email.strip() for email in _raw_email_to.split(",") if email.strip()]
 
 ARCHIVE_FILE = "archive.json"
 
@@ -615,7 +618,7 @@ def generate_html_email(processed_items, start_date, end_date):
 def send_email(html_content, start_date, end_date):
     resend.api_key = RESEND_API_KEY
     subject = f"BW Group Weekly Digest: {len(html_content.split('<tr>'))-1} Updates ({start_date.strftime('%b %d')} - {end_date.strftime('%b %d')})"
-    
+
     try:
         params = {
             "from": EMAIL_FROM,
@@ -625,8 +628,10 @@ def send_email(html_content, start_date, end_date):
         }
         email = resend.Emails.send(params)
         logging.info(f"Email sent successfully: {email}")
+        return True
     except Exception as e:
         logging.error(f"Failed to send email: {e}")
+        return False
 
 # =====================================================================
 # SECTION 9: MAIN EXECUTION
@@ -662,8 +667,14 @@ def main():
     
     start_date, end_date = get_date_range()
     html_content = generate_html_email(processed_items, start_date, end_date)
-    send_email(html_content, start_date, end_date)
-    
+    email_sent = send_email(html_content, start_date, end_date)
+
+    if not email_sent:
+        # Don't mark these items as archived if the email never went out —
+        # otherwise they're silently skipped forever and no one notices.
+        logging.error("Email failed to send. Archive was NOT updated, so these items will be retried next run.")
+        raise SystemExit(1)  # make the GitHub Actions run show as failed
+
     for item in new_items:
         try:
             item['date'] = item['date'].strftime('%Y-%m-%d')
