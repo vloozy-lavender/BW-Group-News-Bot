@@ -12,9 +12,9 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
 GMAIL_APP_PASSWORD = os.getenv("GMAIL_APP_PASSWORD")
-EMAIL_FROM = os.getenv("EMAIL_FROM", "vernonlee3701@gmail.com")  # must match the Gmail account the app password belongs to
+EMAIL_FROM = os.getenv("EMAIL_FROM", "user@example.com")  # must match the Gmail account the app password belongs to — real value always comes from the EMAIL_FROM secret
 
-_raw_email_to = os.getenv("EMAIL_TO", "vernonlee37@gmail.com")
+_raw_email_to = os.getenv("EMAIL_TO", "user@example.com")
 EMAIL_TO = [email.strip() for email in _raw_email_to.split(",") if email.strip()]
 
 
